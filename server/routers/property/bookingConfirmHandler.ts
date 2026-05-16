@@ -12,6 +12,42 @@ import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPost, ragicUploadFile, bookingRateMap } from "./bookingHelpers";
 
+/**
+ * Fallback：直接打 LINE Messaging API push message
+ * 當主系統 webhook 失敗（500/503/timeout/network error）時使用，
+ * 確保即使主系統 MANUS 掛掉，租客還是能收到預約確認卡片。
+ */
+async function pushLineDirect(
+  tenantUid: string,
+  flexMessage: any,
+): Promise<{ success: boolean; error?: string }> {
+  const token = process.env.LINE_MESSAGING_TENANT_ACCESS_TOKEN;
+  if (!token) {
+    return { success: false, error: "LINE_MESSAGING_TENANT_ACCESS_TOKEN not set" };
+  }
+  try {
+    const resp = await fetch("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        to: tenantUid,
+        messages: [flexMessage],
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return { success: false, error: `LINE API ${resp.status}: ${text.slice(0, 200)}` };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
 export async function handleConfirmBooking(
   input: {
     projectId: string;
@@ -313,12 +349,31 @@ export async function handleConfirmBooking(
 
       const webhookUrl = process.env.MAIN_SYSTEM_WEBHOOK_URL;
       const webhookSecret = process.env.BOOKING_WEBHOOK_SECRET;
-      if (!webhookUrl || !webhookSecret) {
+
+      // 統一的 fallback 處理：webhook 失敗時直接打 LINE API
+      const fallbackToDirect = async (reason: string) => {
         console.warn(
-          "[Booking] MAIN_SYSTEM_WEBHOOK_URL or BOOKING_WEBHOOK_SECRET not set, skip LINE notify",
+          `[Booking] webhook 失敗(${reason})，fallback 直接打 LINE API for ${input.uid.slice(0, 8)}...`,
+        );
+        const fb = await pushLineDirect(input.uid, flexMessage);
+        if (fb.success) {
+          console.log(
+            `[Booking] LINE notify sent via FALLBACK direct push for ${input.uid.slice(0, 8)}...`,
+          );
+        } else {
+          console.error(`[Booking] FALLBACK direct push 也失敗: ${fb.error}`);
+        }
+      };
+
+      if (!webhookUrl || !webhookSecret) {
+        // webhook 沒設定 → 直接走 fallback
+        fallbackToDirect("env not configured").catch((e) =>
+          console.error("[Booking] fallback unexpected error:", e?.message || e),
         );
       } else {
         // Fire-and-forget — 不阻擋預約成功 response
+        // 先嘗試走主系統 webhook（讓主系統管 recordSystemMessage 統一）
+        // 主系統失敗（500/503/timeout）就 fallback 直接打 LINE API
         fetch(webhookUrl, {
           method: "POST",
           headers: {
@@ -339,14 +394,16 @@ export async function handleConfirmBooking(
                 `[Booking] notify-line webhook returned ${resp.status}:`,
                 text.slice(0, 200),
               );
+              await fallbackToDirect(`webhook ${resp.status}`);
             } else {
               console.log(
-                `[Booking] LINE notify sent for ${input.uid.slice(0, 8)}...`,
+                `[Booking] LINE notify sent via webhook for ${input.uid.slice(0, 8)}...`,
               );
             }
           })
-          .catch((err) => {
-            console.error("[Booking] notify-line webhook failed:", err.message);
+          .catch(async (err) => {
+            console.error("[Booking] notify-line webhook failed:", err?.message);
+            await fallbackToDirect(`webhook exception: ${err?.message}`);
           });
       }
     }
