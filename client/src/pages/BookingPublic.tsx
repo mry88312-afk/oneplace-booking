@@ -328,15 +328,28 @@ export default function BookingPublic() {
   const handleFileUpload = async (fieldLabel: string, file: File) => {
     setIsUploading(fieldLabel);
     try {
-      const fd = new FormData(); fd.append("file", file);
-      const resp = await fetch("/api/upload", { method: "POST", body: fd });
-      if (!resp.ok) throw new Error("上傳失敗");
-      const data = await resp.json();
-      setFileUploads((prev) => ({ ...prev, [fieldLabel]: { name: file.name, url: data.url } }));
-      setFormAnswers((prev) => ({ ...prev, [fieldLabel]: data.url }));
-      toast.success("檔案上傳成功");
-    } catch (err: any) { toast.error(err.message || "檔案上傳失敗"); }
-    finally { setIsUploading(null); }
+      // 圖片 > 500KB 先壓縮，避免 base64 後撐爆 tRPC body limit
+      let blob: Blob = file;
+      if (file.type.startsWith("image/") && file.size > 500 * 1024) {
+        const { compressImage } = await import("@/lib/uploadUtils");
+        blob = await compressImage(file);
+      }
+      // 編成 base64 data URL，存進 state，預約確認時一起送給 server
+      // server 收到後判斷是 data: 開頭就直接解碼上傳 Ragic（不繞 S3 / 不繞 MANUS）
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("讀檔失敗"));
+        reader.readAsDataURL(blob);
+      });
+      setFileUploads((prev) => ({ ...prev, [fieldLabel]: { name: file.name, url: dataUrl } }));
+      setFormAnswers((prev) => ({ ...prev, [fieldLabel]: dataUrl }));
+      toast.success("檔案已就緒");
+    } catch (err: any) {
+      toast.error(err.message || "檔案處理失敗");
+    } finally {
+      setIsUploading(null);
+    }
   };
 
   const doBooking = (slot: { startTime: string; endTime: string; calendarId?: string; calendarOwner?: string }) => {

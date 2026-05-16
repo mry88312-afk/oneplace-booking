@@ -21,9 +21,11 @@ async function startServer() {
   // 壓縮 API 回應
   app.use(compression());
 
-  // tRPC body parser：預約有檔案上傳（base64），需要較大 limit
-  app.use("/api/trpc", express.json({ limit: "10mb" }));
-  app.use("/api/trpc", express.urlencoded({ limit: "10mb", extended: true }));
+  // tRPC body parser：confirmBooking 把檔案以 base64 data URL 一起送進來
+  // （取代原 /api/upload 中間站，避免 Zeabur 端要維護額外的存檔端點 / 不繞 MANUS）
+  // 25 MB 足夠存摺照片、收據等場景；前端會先壓縮圖片才送
+  app.use("/api/trpc", express.json({ limit: "25mb" }));
+  app.use("/api/trpc", express.urlencoded({ limit: "25mb", extended: true }));
 
   // 其他路由：標準 1MB
   app.use(express.json({ limit: "1mb" }));

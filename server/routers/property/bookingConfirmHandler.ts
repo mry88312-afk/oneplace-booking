@@ -138,13 +138,18 @@ export async function handleConfirmBooking(
           value = parts.join(",");
         }
         if (field.fieldType === "file") {
-          const urls =
-            typeof value === "string"
-              ? value
-                  .split(",")
-                  .map((u: string) => u.trim())
-                  .filter(Boolean)
-              : [value];
+          let urls: string[];
+          if (typeof value === "string" && value.startsWith("data:")) {
+            // base64 data URL 含逗號（data:xxx;base64,yyy），不可 split
+            urls = [value];
+          } else if (typeof value === "string") {
+            urls = value
+              .split(",")
+              .map((u: string) => u.trim())
+              .filter(Boolean);
+          } else {
+            urls = [value];
+          }
           for (const url of urls) {
             fileFieldsToUpload.push({ fieldId: field.ragicFieldId, fileUrl: url });
           }

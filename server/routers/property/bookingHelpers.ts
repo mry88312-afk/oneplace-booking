@@ -208,23 +208,42 @@ export async function ragicUploadFile(
   ragicPath: string,
   ragicId: number,
   fieldId: string,
-  fileUrl: string
+  fileUrlOrDataUrl: string
 ): Promise<void> {
   try {
-    // 1. 從 S3 URL 下載檔案
-    console.log(`[Ragic Upload] Downloading file from: ${fileUrl}`);
-    const fileResp = await fetch(fileUrl);
-    if (!fileResp.ok) {
-      throw new Error(`Failed to download file: ${fileResp.status}`);
+    let arrayBuffer: ArrayBuffer;
+    let fileName: string;
+    let contentType: string;
+
+    if (fileUrlOrDataUrl.startsWith("data:")) {
+      // base64 data URL：前端直接 FileReader 編出來的，沒繞中間站
+      // 格式：data:image/jpeg;base64,/9j/4AAQ...
+      const match = fileUrlOrDataUrl.match(/^data:([^;]+);base64,(.*)$/);
+      if (!match) throw new Error("Invalid data URL format");
+      contentType = match[1] || "application/octet-stream";
+      const base64 = match[2];
+      const buffer = Buffer.from(base64, "base64");
+      arrayBuffer = buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength,
+      );
+      // 推副檔名（jpeg → jpg 比較通用）
+      const subtype = contentType.split("/")[1]?.split("+")[0] || "bin";
+      const ext = subtype === "jpeg" ? "jpg" : subtype;
+      fileName = `upload.${ext}`;
+      console.log(`[Ragic Upload] Decoded base64 data URL, type=${contentType}, size=${arrayBuffer.byteLength}`);
+    } else {
+      // URL：從遠端下載（舊有的 S3 流程，保留向後相容）
+      console.log(`[Ragic Upload] Downloading file from: ${fileUrlOrDataUrl}`);
+      const fileResp = await fetch(fileUrlOrDataUrl);
+      if (!fileResp.ok) {
+        throw new Error(`Failed to download file: ${fileResp.status}`);
+      }
+      arrayBuffer = await fileResp.arrayBuffer();
+      const urlPath = new URL(fileUrlOrDataUrl).pathname;
+      fileName = decodeURIComponent(urlPath.split("/").pop() || "upload.jpg");
+      contentType = fileResp.headers.get("content-type") || "image/jpeg";
     }
-    const arrayBuffer = await fileResp.arrayBuffer();
-    
-    // 從 URL 提取檔名
-    const urlPath = new URL(fileUrl).pathname;
-    const fileName = decodeURIComponent(urlPath.split("/").pop() || "upload.jpg");
-    
-    // 判斷 content type
-    const contentType = fileResp.headers.get("content-type") || "image/jpeg";
     
     // 2. 用 Node.js 原生 FormData 上傳到 Ragic（模擬 curl -F）
     const url = `${BASE}/${APP}/${ragicPath}/${ragicId}`;
