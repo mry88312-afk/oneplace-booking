@@ -1,0 +1,258 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-display: "Playfair Display", serif;
+  --font-sans: "Inter", "Noto Sans TC", system-ui, -apple-system, sans-serif;
+}
+
+/* ═══════════════════════════════════════════════
+   Deep Forest Green — Natural Luxury Theme
+   ═══════════════════════════════════════════════ */
+
+:root {
+  /* Core radius */
+  --radius: 0.625rem;
+
+  /* Font size scale (controlled by JS) */
+  --font-scale: 1;
+  font-size: calc(16px * var(--font-scale));
+
+  /* Primary: Deep forest green */
+  --primary: oklch(0.35 0.08 150);
+  --primary-foreground: oklch(0.97 0.01 150);
+
+  /* Background: Warm off-white with subtle green tint */
+  --background: oklch(0.975 0.005 150);
+  --foreground: oklch(0.18 0.04 150);
+
+  /* Card: Slightly warmer than background */
+  --card: oklch(0.99 0.003 150);
+  --card-foreground: oklch(0.18 0.04 150);
+
+  /* Popover */
+  --popover: oklch(0.99 0.003 150);
+  --popover-foreground: oklch(0.18 0.04 150);
+
+  /* Secondary: Sage green tint */
+  --secondary: oklch(0.94 0.015 150);
+  --secondary-foreground: oklch(0.30 0.06 150);
+
+  /* Muted: Soft green-grey */
+  --muted: oklch(0.94 0.01 150);
+  --muted-foreground: oklch(0.50 0.03 150);
+
+  /* Accent: Warm moss highlight */
+  --accent: oklch(0.92 0.025 150);
+  --accent-foreground: oklch(0.20 0.05 150);
+
+  /* Destructive */
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  /* Borders & inputs: Subtle green-grey */
+  --border: oklch(0.88 0.015 150);
+  --input: oklch(0.90 0.012 150);
+  --ring: oklch(0.45 0.10 150);
+
+  /* Charts: Green gradient palette */
+  --chart-1: oklch(0.72 0.12 150);
+  --chart-2: oklch(0.55 0.10 150);
+  --chart-3: oklch(0.42 0.09 150);
+  --chart-4: oklch(0.35 0.08 150);
+  --chart-5: oklch(0.28 0.07 150);
+
+  /* Sidebar: Deep forest green */
+  --sidebar: oklch(0.18 0.05 150);
+  --sidebar-foreground: oklch(0.88 0.02 150);
+  --sidebar-primary: oklch(0.60 0.12 150);
+  --sidebar-primary-foreground: oklch(0.98 0.005 150);
+  --sidebar-accent: oklch(0.24 0.06 150);
+  --sidebar-accent-foreground: oklch(0.90 0.02 150);
+  --sidebar-border: oklch(0.26 0.05 150);
+  --sidebar-ring: oklch(0.55 0.10 150);
+}
+
+.dark {
+  /* Primary: Bright green on dark */
+  --primary: oklch(0.60 0.12 150);
+  --primary-foreground: oklch(0.12 0.04 150);
+
+  /* Background: Very deep green-black */
+  --background: oklch(0.12 0.03 150);
+  --foreground: oklch(0.88 0.015 150);
+
+  /* Card: Slightly lighter than background */
+  --card: oklch(0.16 0.035 150);
+  --card-foreground: oklch(0.88 0.015 150);
+
+  /* Popover */
+  --popover: oklch(0.16 0.035 150);
+  --popover-foreground: oklch(0.88 0.015 150);
+
+  /* Secondary */
+  --secondary: oklch(0.22 0.04 150);
+  --secondary-foreground: oklch(0.78 0.02 150);
+
+  /* Muted */
+  --muted: oklch(0.22 0.035 150);
+  --muted-foreground: oklch(0.62 0.03 150);
+
+  /* Accent */
+  --accent: oklch(0.22 0.04 150);
+  --accent-foreground: oklch(0.92 0.01 150);
+
+  /* Destructive */
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  /* Borders */
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.55 0.12 150);
+
+  /* Charts */
+  --chart-1: oklch(0.72 0.12 150);
+  --chart-2: oklch(0.60 0.10 150);
+  --chart-3: oklch(0.50 0.09 150);
+  --chart-4: oklch(0.40 0.08 150);
+  --chart-5: oklch(0.30 0.07 150);
+
+  /* Sidebar */
+  --sidebar: oklch(0.14 0.04 150);
+  --sidebar-foreground: oklch(0.88 0.015 150);
+  --sidebar-accent: oklch(0.22 0.04 150);
+  --sidebar-accent-foreground: oklch(0.92 0.01 150);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.55 0.12 150);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    overflow-x: hidden;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    overflow-x: hidden;
+  }
+
+  /* 手機版預設字體稍大 */
+  @media (max-width: 640px) {
+    :root {
+      font-size: calc(17px * var(--font-scale));
+    }
+  }
+
+  /* Font size classes set by FontSizeProvider */
+  .font-size-small {
+    --font-scale: 0.875;
+  }
+  .font-size-medium {
+    --font-scale: 1;
+  }
+  .font-size-large {
+    --font-scale: 1.15;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [type="button"]:not(:disabled),
+  [type="submit"]:not(:disabled),
+  [type="reset"]:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    @apply cursor-pointer;
+  }
+}
+
+@layer components {
+  /* Fix: Override Radix ScrollArea's display:table inner div for chat panels.
+   * Radix adds `display: table; min-width: 100%` to the viewport's inner div,
+   * which causes flex-row-reverse (OUT messages) to overflow beyond the viewport.
+   * Changing to display:block constrains children to the viewport width. */
+  [data-slot="scroll-area-viewport"] > div {
+    display: block !important;
+  }
+
+  /* Hide scrollbar but keep scrolling */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /**
+   * Custom container utility that centers content and adds responsive padding.
+   */
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .flex {
+    min-height: 0;
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem;
+      padding-right: 2rem;
+      max-width: 1280px;
+    }
+  }
+}
