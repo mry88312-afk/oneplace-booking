@@ -63,6 +63,10 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`[oneplace-booking] Server running on http://localhost:${port}/`);
     console.log(`[oneplace-booking] Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`[oneplace-booking] DATABASE_URL: ${process.env.DATABASE_URL ? "set" : "MISSING"}`);
+    console.log(`[oneplace-booking] RAGIC_API_KEY: ${process.env.RAGIC_API_KEY ? "set" : "MISSING"}`);
+    console.log(`[oneplace-booking] MAIN_SYSTEM_WEBHOOK_URL: ${process.env.MAIN_SYSTEM_WEBHOOK_URL ? "set" : "MISSING"}`);
+    console.log(`[oneplace-booking] BOOKING_WEBHOOK_SECRET: ${process.env.BOOKING_WEBHOOK_SECRET ? "set" : "MISSING"}`);
     if (!process.env.DATABASE_URL) {
       console.warn("[oneplace-booking] ⚠️  DATABASE_URL not set");
     }
