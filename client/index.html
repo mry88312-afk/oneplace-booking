@@ -16,6 +16,13 @@
     <script>
       // 保留進入 LIFF 之前的原始 URL，供 BookingPublic 解析 liff.state / liff.referrer
       window.__INITIAL_URL__ = window.location.href;
+      // P17 debug: ?debug=1 啟用 vConsole（手機端可看 console.log），方便 LIFF / LINE App 內部 debug
+      if (/[?&]debug=1(\b|&|$)/.test(window.location.search)) {
+        var __s = document.createElement('script');
+        __s.src = 'https://unpkg.com/vconsole@latest/dist/vconsole.min.js';
+        __s.onload = function () { try { new window.VConsole(); } catch (e) {} };
+        document.head.appendChild(__s);
+      }
     </script>
   </head>
   <body>

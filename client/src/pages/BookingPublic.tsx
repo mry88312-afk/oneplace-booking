@@ -22,10 +22,14 @@ export default function BookingPublic() {
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const initialParams = useMemo(() => new URLSearchParams(initialSearch), [initialSearch]);
   const uidFromUrl = initialParams.get("uid") || "";
+  const debugMode = initialParams.get("debug") === "1";
 
-  // presetT 需要在 liff.init() 完成後才能正確讀取（LIFF 會還原 liff.state 到正確 URL）
-  // 使用 state 儲存，在 liffReady 後更新
-  const [presetT, setPresetT] = useState("");
+  // presetT 初值直接從 URL 讀（格式 A：?t=xxx 進來，mount 當下就在 URL 上）
+  // 若是格式 B（liff.state encoded），liff.init() 完成還原 URL 後會再覆寫一次
+  const [presetT, setPresetT] = useState(() => {
+    const t = initialParams.get("t") || "";
+    return /^(\d{8}|\d{12})$/.test(t) ? t : "";
+  });
   const isPresetMode = /^(\d{8}|\d{12})$/.test(presetT);
 
   const [view, setView] = useState<PageView>("verify");
@@ -105,6 +109,7 @@ export default function BookingPublic() {
 
   // 指定時段模式：驗證後跳到問卷頁的輔助函數
   const jumpToPresetForm = (ps: NonNullable<typeof presetSlotQuery.data>, tmpl: typeof template) => {
+    console.log("[BOOKING] jumpToPresetForm 觸發", { date: ps.date, start: ps.startTimeDisplay, assignee: ps.assigneeName });
     const slot = { startTime: ps.startTime, endTime: ps.endTime, calendarId: ps.calendarId, calendarOwner: ps.assigneeName };
     setSelectedDate(ps.date);
     setConfirmedSlot(slot);
@@ -125,9 +130,11 @@ export default function BookingPublic() {
       verifyRetryRef.current = 0;
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
+      console.log("[BOOKING] verify success — isPresetMode:", isPresetMode, "presetSlot.data:", !!presetSlotQuery.data, "presetT:", presetT);
       if (isPresetMode && presetSlotQuery.data) {
         jumpToPresetForm(presetSlotQuery.data, template);
       } else {
+        if (isPresetMode) console.log("[BOOKING] presetSlot 尚未回來 → 先進 calendar，等 useEffect 補救");
         setView("calendar");
       }
       setIsVerifying(false);
@@ -224,9 +231,11 @@ export default function BookingPublic() {
     liff.init({ liffId, withLoginOnExternalBrowser: false })
       .then(async () => {
         // liff.init() 完成後，LIFF 已將 liff.state 還原到正確 URL
-        // 此時才能正確讀取 window.location.search 中的 t 參數
+        // 此時才能正確讀取 window.location.search 中的 t 參數（針對格式 B：liff.state encoded）
+        // 格式 A（直接 ?t=）的 t 已在 mount 時就 set 過了，這裡為了 cover 格式 B 再讀一次
         const postInitParams = new URLSearchParams(window.location.search);
         const tParam = postInitParams.get("t") || "";
+        console.log("[BOOKING] liff.init done — window.location.search:", window.location.search, "tParam:", tParam, "isLoggedIn:", liff.isLoggedIn(), "isInClient:", liff.isInClient());
         if (/^(\d{8}|\d{12})$/.test(tParam)) setPresetT(tParam);
 
         const isLoggedIn = liff.isLoggedIn();
@@ -266,10 +275,16 @@ export default function BookingPublic() {
     if (slotsQuery.data) { setCalendarOwner(slotsQuery.data.calendarOwner || ""); setCalendarId(slotsQuery.data.calendarId || ""); }
   }, [slotsQuery.data]);
 
-  // 當 presetSlotQuery 回來時，如果驗證已完成且還在 calendar 頁，跳轉到問卷頁
-  // （处理 presetT 在 verify 後才設定、query 非同步回來的情況）
+  // 當 presetSlotQuery 回來時，如果驗證已完成且還在 calendar/slots 頁，跳轉到問卷頁
+  // 包含 slots 是因為使用者可能已點日期切到 slots 頁，這時 preset 仍應拉回指定時段
   useEffect(() => {
-    if (isPresetMode && presetSlotQuery.data && verifyMutation.isSuccess && view === "calendar" && template) {
+    if (
+      isPresetMode &&
+      presetSlotQuery.data &&
+      verifyMutation.isSuccess &&
+      (view === "calendar" || view === "slots") &&
+      template
+    ) {
       jumpToPresetForm(presetSlotQuery.data, template);
     }
   }, [presetSlotQuery.data, isPresetMode, verifyMutation.isSuccess, view, template]);
@@ -379,6 +394,85 @@ export default function BookingPublic() {
     document.title = template?.name ? `${template.name} - 一方生活` : "一方生活 - 預約服務";
     return () => { document.title = "外勤工作站"; };
   }, [template?.name]);
+
+  // P17 debug: mount 時 log 一次初始 URL state
+  const mountLoggedRef = useRef(false);
+  useEffect(() => {
+    if (mountLoggedRef.current) return;
+    mountLoggedRef.current = true;
+    console.log("[BOOKING] mount", {
+      url: window.location.href,
+      search: window.location.search,
+      projectId,
+      uidFromUrl,
+      presetT_initial: presetT,
+      isPresetMode_initial: isPresetMode,
+      initialUrl: initialUrlRef.current,
+      debugMode,
+    });
+  }, []);
+
+  // P17 debug overlay (?debug=1 啟用) — 用 DOM API 避開所有 view 都要包 fragment
+  useEffect(() => {
+    if (!debugMode) return;
+    let el = document.getElementById("__booking_debug__");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "__booking_debug__";
+      el.style.cssText =
+        "position:fixed;bottom:0;right:0;background:rgba(0,0,0,0.85);color:white;padding:8px 12px;font-size:11px;font-family:monospace;z-index:9999;max-width:92vw;line-height:1.4;border-top-left-radius:8px;pointer-events:none;white-space:pre-wrap;word-break:break-all";
+      document.body.appendChild(el);
+    }
+    const verifyStatus = verifyMutation.isPending
+      ? "pending"
+      : verifyMutation.isSuccess
+        ? "ok"
+        : verifyMutation.isError
+          ? `err:${verifyMutation.error?.message}`
+          : "idle";
+    const presetStatus = !isPresetMode
+      ? "(off)"
+      : presetSlotQuery.isPending
+        ? "pending"
+        : presetSlotQuery.isSuccess
+          ? "ok"
+          : presetSlotQuery.isError
+            ? `err:${presetSlotQuery.error?.message}`
+            : "idle";
+    el.textContent =
+      `url: ${window.location.href.slice(-90)}\n` +
+      `projectId: ${projectId}\n` +
+      `uid(url): ${uidFromUrl || "(none)"}\n` +
+      `lineUid: ${lineUserId || "(none)"}\n` +
+      `presetT: ${presetT || "(none)"} isPreset: ${isPresetMode}\n` +
+      `view: ${view}\n` +
+      `liffReady: ${liffReady} liffErr: ${liffError || "(none)"}\n` +
+      `verify: ${verifyStatus}\n` +
+      `presetSlot: ${presetStatus}`;
+  }, [
+    debugMode,
+    view,
+    presetT,
+    isPresetMode,
+    uidFromUrl,
+    lineUserId,
+    liffReady,
+    liffError,
+    verifyMutation.isPending,
+    verifyMutation.isSuccess,
+    verifyMutation.isError,
+    verifyMutation.error?.message,
+    presetSlotQuery.isPending,
+    presetSlotQuery.isSuccess,
+    presetSlotQuery.isError,
+    presetSlotQuery.error?.message,
+    projectId,
+  ]);
+  useEffect(() => {
+    return () => {
+      document.getElementById("__booking_debug__")?.remove();
+    };
+  }, []);
 
   // Render
   if (templateQuery.isLoading) return <BookingLoadingScreen />;
