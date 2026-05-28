@@ -206,6 +206,7 @@ export const bookingRouter = router({
         phone: z.string().optional(),
         address: z.string().optional(),
         formAnswers: z.record(z.string(), z.any()).optional(),
+        contractRecordId: z.number().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {

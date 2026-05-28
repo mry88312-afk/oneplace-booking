@@ -10,7 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
-import { ragicPost, ragicUploadFile, bookingRateMap } from "./bookingHelpers";
+import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap } from "./bookingHelpers";
 
 /**
  * Fallback：直接打 LINE Messaging API push message
@@ -62,6 +62,7 @@ export async function handleConfirmBooking(
     phone?: string;
     address?: string;
     formAnswers?: Record<string, any>;
+    contractRecordId?: number;
   },
   ctx: any,
 ) {
@@ -241,7 +242,19 @@ export async function handleConfirmBooking(
     status: "confirmed",
   });
 
-  // 3. 構建 LINE Flex Message 並請主系統幫忙發送
+  // 3. 回寫合約記錄（/go-back/22 欄位 1015394 = 續約 or 退租）
+  if (input.contractRecordId && template.contractAction) {
+    try {
+      await ragicPut("go-back/22", input.contractRecordId, {
+        "1015394": template.contractAction,
+      });
+      console.log(`[Booking] 合約回寫成功：record ${input.contractRecordId} → 欄位 1015394="${template.contractAction}"`);
+    } catch (err: any) {
+      console.error("[Booking] 合約回寫失敗（不影響預約結果）:", err.message);
+    }
+  }
+
+  // 4. 構建 LINE Flex Message 並請主系統幫忙發送
   try {
     if (input.uid && input.uid !== "unknown") {
       const startDt = new Date(input.startTime);

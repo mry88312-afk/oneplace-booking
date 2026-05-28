@@ -60,6 +60,7 @@ export default function BookingPublic() {
   const [fileUploads, setFileUploads] = useState<Record<string, { name: string; url: string }>>({});
   const [isVerifying, setIsVerifying] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
+  const [contractRecordId, setContractRecordId] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState<string | null>(null);
   const [bookingResult, setBookingResult] = useState<{ success: boolean; bookingId?: number } | null>(null);
 
@@ -130,6 +131,7 @@ export default function BookingPublic() {
       verifyRetryRef.current = 0;
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
+      if (data.contractRecordId) setContractRecordId(data.contractRecordId);
       console.log("[BOOKING] verify success — isPresetMode:", isPresetMode, "presetSlot.data:", !!presetSlotQuery.data, "presetT:", presetT);
       if (isPresetMode && presetSlotQuery.data) {
         jumpToPresetForm(presetSlotQuery.data, template);
@@ -167,6 +169,7 @@ export default function BookingPublic() {
       phoneRetryRef.current = 0;
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
+      if (data.contractRecordId) setContractRecordId(data.contractRecordId);
       if (isPresetMode && presetSlotQuery.data) {
         jumpToPresetForm(presetSlotQuery.data, template);
       } else {
@@ -376,6 +379,7 @@ export default function BookingPublic() {
       calendarId: slot.calendarId || calendarId, assigneeName: slot.calendarOwner || calendarOwner,
       phone: phoneInput.trim() || undefined, address: address || undefined,
       formAnswers: Object.keys(formAnswers).length > 0 ? formAnswers : undefined,
+      contractRecordId: contractRecordId ?? undefined,
     });
   };
 

@@ -10,6 +10,7 @@ import {
   ragicGet,
   ragicPut,
   extractTenantInfo,
+  lookupLatestContractRecordId,
   RAGIC_API_KEY_VALUE,
 } from "./bookingHelpers";
 
@@ -106,6 +107,8 @@ export async function handleVerifyTenantUid(input: {
     ragicId: info.ragicId,
   });
 
+  const contractRecordId = await lookupLatestContractRecordId(info.phone);
+
   return {
     tenantName: info.tenantName,
     roomNumber: info.roomNumber,
@@ -114,6 +117,7 @@ export async function handleVerifyTenantUid(input: {
     phone: info.phone,
     templateId: template.id,
     templateType: template.templateType,
+    contractRecordId,
   };
 }
 
@@ -203,6 +207,8 @@ export async function handleVerifyByPhone(input: {
     }
   }
 
+  const contractRecordId = await lookupLatestContractRecordId(info.phone);
+
   return {
     tenantName: info.tenantName,
     roomNumber: info.roomNumber,
@@ -211,5 +217,6 @@ export async function handleVerifyByPhone(input: {
     phone: info.phone,
     templateId: template.id,
     templateType: template.templateType,
+    contractRecordId,
   };
 }

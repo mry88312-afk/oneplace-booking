@@ -37,6 +37,7 @@ export const bookingTemplates = mysqlTable("booking_templates", {
   instructionEnabled: boolean("bt_instructionEnabled").notNull().default(false),
   instructionText: text("bt_instructionText"),
   minLeadDays: int("bt_minLeadDays").notNull().default(0),
+  contractAction: varchar("bt_contractAction", { length: 32 }),
   isActive: boolean("bt_isActive").notNull().default(true),
   createdByUserId: int("bt_createdByUserId"),
   createdAt: timestamp("bt_createdAt").defaultNow().notNull(),

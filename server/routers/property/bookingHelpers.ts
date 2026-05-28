@@ -197,6 +197,33 @@ export async function lookupContractInfo(phone: string, tenantName: string): Pro
   return null;
 }
 
+/** 從 go-back/22 合約管理表查詢租客最新合約的 Ragic 記錄 ID（用電話欄位 1007360） */
+export async function lookupLatestContractRecordId(phone: string): Promise<number | null> {
+  const normalized = phone ? phone.replace(/[\s\-()]/g, "") : "";
+  if (!normalized) return null;
+  try {
+    const data = await ragicGet("go-back/22", {
+      where: `1007360,eq,${normalized}`,
+      limit: "5",
+    });
+    const records = Object.values(data) as any[];
+    if (records.length === 0) {
+      console.log("[Contract] go-back/22 查無合約，電話:", normalized);
+      return null;
+    }
+    const sorted = records
+      .map((r: any) => Number(r["_ragicId"]))
+      .filter((id) => !isNaN(id) && id > 0)
+      .sort((a, b) => b - a);
+    const result = sorted.length > 0 ? sorted[0] : null;
+    console.log("[Contract] go-back/22 最新合約 _ragicId:", result);
+    return result;
+  } catch (err: any) {
+    console.error("[Contract] lookupLatestContractRecordId 失敗:", err.message);
+    return null;
+  }
+}
+
 // ─── Rate limiting ───────────────────────────────────────────────────────────
 export const bookingRateMap = new Map<string, { count: number; resetAt: number }>();
 
