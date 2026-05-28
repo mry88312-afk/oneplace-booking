@@ -107,7 +107,7 @@ export async function handleVerifyTenantUid(input: {
     ragicId: info.ragicId,
   });
 
-  const contractRecordId = await lookupLatestContractRecordId(info.phone);
+  const contractRecordId = await lookupLatestContractRecordId(info.contractId);
 
   return {
     tenantName: info.tenantName,
@@ -207,7 +207,7 @@ export async function handleVerifyByPhone(input: {
     }
   }
 
-  const contractRecordId = await lookupLatestContractRecordId(info.phone);
+  const contractRecordId = await lookupLatestContractRecordId(info.contractId);
 
   return {
     tenantName: info.tenantName,
