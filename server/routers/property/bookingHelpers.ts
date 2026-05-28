@@ -127,7 +127,14 @@ export async function ragicPut(ragicPath: string, ragicId: number, data: Record<
     console.error(`[API Response] Ragic PUT FAILED: status=${resp.status}, body=${text}`);
     throw new Error(`Ragic PUT error: ${resp.status} - ${text}`);
   }
-  try { return JSON.parse(text); } catch { return { raw: text }; }
+  let parsed: any;
+  try { parsed = JSON.parse(text); } catch { return { raw: text }; }
+  // Ragic 權限失敗時 HTTP 200 但 body 是 {"status":"ERROR","msg":"..."}
+  if (parsed?.status === "ERROR") {
+    console.error(`[API Response] Ragic PUT body ERROR:`, parsed.msg || text);
+    throw new Error(`Ragic PUT body error: ${parsed.msg || text}`);
+  }
+  return parsed;
 }
 
 /** 從 Ragic 房客記錄中提取房源資訊（for-system-use/2 表） */
