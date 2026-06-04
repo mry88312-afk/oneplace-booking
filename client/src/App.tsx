@@ -29,6 +29,7 @@ function Router() {
   return (
     <Suspense fallback={<PageLoadingFallback />}>
       <Switch>
+        <Route path="/" component={AdminGate} />
         <Route path="/admin" component={AdminGate} />
         <Route path="/book/:projectId" component={BookingPublic} />
         <Route path="/book">{() => <BookingNotFound />}</Route>

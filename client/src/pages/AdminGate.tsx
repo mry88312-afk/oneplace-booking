@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+
+const BookingAdmin = lazy(() => import("./BookingAdmin"));
 
 const PW_KEY = "adminPassword";
 
@@ -105,18 +107,14 @@ export default function AdminGate() {
   }
 
   return (
-    <div className="min-h-screen p-6 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">預約後台</h1>
-        <Button variant="outline" size="sm" onClick={handleLogout}>
-          登出
-        </Button>
-      </div>
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          ✅ 已登入。BookingAdmin 管理介面即將上線（P19c）。
-        </CardContent>
-      </Card>
-    </div>
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-screen">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <BookingAdmin onLogout={handleLogout} />
+    </Suspense>
   );
 }
