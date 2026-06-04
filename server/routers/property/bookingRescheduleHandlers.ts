@@ -11,7 +11,7 @@ import { TRPCError } from "@trpc/server";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
-import { ragicPut, ragicDelete } from "./bookingHelpers";
+import { ragicPut, ragicDelete, ragicExecuteButton } from "./bookingHelpers";
 import { pushLineDirect } from "./bookingConfirmHandler";
 
 // ─── LINE 卡片小工具（取消 / 變更後通知）──────────────────────────────────
@@ -138,15 +138,22 @@ export async function handleCancelBookingPublic(input: { bookingId: number; uid:
     return { success: true, alreadyCancelled: true };
   }
 
-  // 硬刪除 Ragic 任務記錄（go-back/1 等 ragicTaskPath）
+  // 刪除 Ragic 任務：優先觸發動作按鈕（按鈕內部會發 webhook 刪 Google 日曆 + 刪除該筆）；
+  // 未設定按鈕 ID 時退回直接 DELETE（不連動日曆）。
   if (record.ragicRecordId) {
     const numericId = Number(record.ragicRecordId);
     if (!isNaN(numericId) && numericId > 0) {
+      const buttonId = process.env.RAGIC_CANCEL_BUTTON_ID;
       try {
-        await ragicDelete(template.ragicTaskPath, numericId);
-        console.log(`[Reschedule] 已刪除 Ragic 任務 ${template.ragicTaskPath}/${numericId}`);
+        if (buttonId) {
+          await ragicExecuteButton(template.ragicTaskPath, numericId, buttonId);
+          console.log(`[Reschedule] 已觸發取消動作按鈕 ${template.ragicTaskPath}/${numericId} bId=${buttonId}`);
+        } else {
+          console.warn("[Reschedule] RAGIC_CANCEL_BUTTON_ID 未設定，改用直接刪除（不連動 Google 日曆）");
+          await ragicDelete(template.ragicTaskPath, numericId);
+        }
       } catch (err: any) {
-        console.error("[Reschedule] Ragic 刪除失敗:", err.message);
+        console.error("[Reschedule] 取消刪除失敗:", err.message);
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "取消失敗，請稍後再試或聯繫客服" });
       }
     }

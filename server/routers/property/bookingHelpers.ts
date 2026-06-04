@@ -165,6 +165,34 @@ export async function ragicDelete(ragicPath: string, ragicId: number) {
   return parsed;
 }
 
+/**
+ * 執行 Ragic 動作按鈕（官方 API 2.3.9 Execute Action Button）。
+ *  POST {base}/{app}/{ragicPath}/{recordId}?api&v=3&bId={buttonId}（無 body）。
+ *  按鈕內部的 server-side JS 會自行執行（例如：發 webhook 刪 Google 日曆 + query.deleteEntry 刪該筆）。
+ *  buttonId 可由 GET {ragicPath}/metadata/actionButton?api&category=massOperation 取得。
+ */
+export async function ragicExecuteButton(ragicPath: string, ragicId: number, buttonId: string) {
+  const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?api&v=3&bId=${encodeURIComponent(buttonId)}`;
+  console.log(`[Ragic ActionButton] POST ${ragicPath}/${ragicId} bId=${buttonId}`);
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Basic ${RAGIC_API_KEY}` },
+  });
+  const text = await resp.text();
+  console.log(`[API Response] Ragic ActionButton response (status=${resp.status}):`, text.slice(0, 400));
+  if (!resp.ok) {
+    console.error(`[API Response] Ragic ActionButton FAILED: status=${resp.status}, body=${text}`);
+    throw new Error(`Ragic action button error: ${resp.status} - ${text}`);
+  }
+  let parsed: any;
+  try { parsed = JSON.parse(text); } catch { return { raw: text }; }
+  if (parsed?.status === "ERROR") {
+    console.error(`[API Response] Ragic ActionButton body ERROR:`, parsed.msg || text);
+    throw new Error(`Ragic action button body error: ${parsed.msg || text}`);
+  }
+  return parsed;
+}
+
 /** 從 Ragic 房客記錄中提取房源資訊（for-system-use/2 表） */
 export function extractTenantInfo(record: any) {
   const tenantName = record["房客姓名1"] || record["姓名"] || record["租客姓名"] || record["Name"] || "";
