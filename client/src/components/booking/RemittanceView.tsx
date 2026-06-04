@@ -1,22 +1,43 @@
 /**
- * P22b — 續約「付款設定 / 更新個資」步驟。
+ * P22b' — 續約「付款設定 / 更新個資」步驟（委派架構）。
  *
- * 插在身份驗證之後、選時段之前（只在 renewal 啟用）。
- * 內含三個子步驟：
- *   form → 補身分證/email/職業，發送 OTP
- *   otp  → 輸入簡訊驗證碼，驗證成功取得虛擬帳號並寫回 Ragic + 推卡 + n8n
- *   done → 顯示固定式虛擬帳號，按「繼續預約」回到選時段
+ * 機密邏輯（三竹 OTP、虛擬帳號產生、企業代碼）不在本 repo，
+ * 而是直接呼叫既有的 tenant-form-liff 服務 API（固定 IP 已白名單、env/VA 邏輯只存在那台）。
  *
- * 後端：booking.remittanceSendOtp / remittanceVerifyOtp / remittanceSubmit（P22a）
+ * 子步驟：form（補個資→發OTP）→ otp（驗證→取VA+寫Ragic+推卡+n8n，全在那台）→ done（顯示VA）
+ *
+ * 對應 tenant-form-liff 端點：
+ *   POST /api/send-otp   { phone, name?, email?, job? } → { success, message, isForeignPhone?, devMode? }
+ *   POST /api/verify-otp { phone, otp }                 → { success, message, virtualAccount, verifyToken }
+ *   POST /api/submit     { uid, name, phone, idNumber, email, job, virtualAccount, verifyToken, lineProfile } → { success }
  */
 import { useState, useEffect, useRef } from "react";
-import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2, Wallet, ShieldCheck, Copy, CheckCircle2, Phone } from "lucide-react";
 import { BookingContainer } from "./utils";
+
+// 你現有的 tenant-form-liff（匯訂）服務公開網址；機密邏輯都在這台。
+// 可用 VITE_REMITTANCE_API_BASE build 變數覆蓋，否則用下方常數。
+const REMITTANCE_API =
+  (import.meta as any).env?.VITE_REMITTANCE_API_BASE ||
+  "https://deposit.zeabur.app/api"; // tenant-form-liff（匯訂）正式服務
+
+async function postJson(path: string, body: any): Promise<any> {
+  const resp = await fetch(`${REMITTANCE_API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  // 這些端點即使驗證失敗也回 JSON（400/401），故不依賴 resp.ok
+  try {
+    return await resp.json();
+  } catch {
+    return { success: false, message: `服務回應異常 (${resp.status})` };
+  }
+}
 
 interface RemittanceViewProps {
   template: any;
@@ -30,21 +51,20 @@ interface RemittanceViewProps {
   onComplete: () => void;
 }
 
-export function RemittanceView({ template, name, phone, uid, onComplete }: RemittanceViewProps) {
+export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewProps) {
   const normalizedPhone = (phone || "").replace(/\D/g, "");
   const [sub, setSub] = useState<"form" | "otp" | "done">("form");
 
-  // 表單欄位（姓名/電話帶入，其餘待補）
   const [nameInput, setNameInput] = useState(name || "");
   const [idNumber, setIdNumber] = useState("");
   const [email, setEmail] = useState("");
   const [job, setJob] = useState("");
 
-  // OTP / VA 狀態
   const [otp, setOtp] = useState("");
   const [isForeign, setIsForeign] = useState(false);
   const [virtualAccount, setVirtualAccount] = useState("");
-  const [verifyToken, setVerifyToken] = useState("");
+  const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -60,10 +80,6 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
   };
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
 
-  const sendOtp = trpc.booking.remittanceSendOtp.useMutation();
-  const verifyOtp = trpc.booking.remittanceVerifyOtp.useMutation();
-  const submit = trpc.booking.remittanceSubmit.useMutation();
-
   const handleSendOtp = async () => {
     if (!nameInput.trim()) return toast.error("請輸入姓名");
     if (!idNumber.trim()) return toast.error("請輸入身分證字號或護照號碼");
@@ -72,16 +88,18 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
     if (!/^\d{8,15}$/.test(normalizedPhone)) {
       return toast.error("檔內電話格式有誤，請改用電話驗證或聯繫客服");
     }
+    setSending(true);
     try {
-      const r = await sendOtp.mutateAsync({ phone: normalizedPhone });
+      const r = await postJson("/send-otp", {
+        phone: normalizedPhone, name: nameInput.trim(), email: email.trim(), job: job.trim(),
+      });
       if (r.success) {
-        if ((r as any).devMode) toast.success("開發模式：驗證碼 888888");
+        if (r.devMode) toast.success("開發模式：請用固定驗證碼");
         else toast.success("驗證碼已發送至您的手機");
         setIsForeign(false);
         setSub("otp");
         startCountdown();
-      } else if ((r as any).isForeignPhone) {
-        // 外國電話無法發簡訊 → 進 OTP 步驟由客服用萬能碼救場
+      } else if (r.isForeignPhone) {
         setIsForeign(true);
         setSub("otp");
         toast.info("外國電話無法發送簡訊，請聯繫一方客服取得驗證碼");
@@ -90,36 +108,43 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
       }
     } catch (err: any) {
       toast.error(err?.message || "網路錯誤，請稍後重試");
+    } finally {
+      setSending(false);
     }
   };
 
   const handleResend = async () => {
     if (countdown > 0) return;
+    setSending(true);
     try {
-      const r = await sendOtp.mutateAsync({ phone: normalizedPhone });
+      const r = await postJson("/send-otp", {
+        phone: normalizedPhone, name: nameInput.trim(), email: email.trim(), job: job.trim(),
+      });
       if (r.success) { toast.success("驗證碼已重新發送"); setOtp(""); startCountdown(); }
       else toast.error(r.message || "發送失敗");
     } catch (err: any) {
       toast.error(err?.message || "網路錯誤");
+    } finally {
+      setSending(false);
     }
   };
 
   const handleVerify = async () => {
     if (otp.trim().length < 4) return toast.error("請輸入完整驗證碼");
+    setVerifying(true);
     try {
-      const r = await verifyOtp.mutateAsync({ phone: normalizedPhone, otp: otp.trim() });
-      if (!r.success || !(r as any).virtualAccount) {
+      const r = await postJson("/verify-otp", { phone: normalizedPhone, otp: otp.trim() });
+      if (!r.success || !r.virtualAccount) {
         toast.error(r.message || "驗證失敗");
         setOtp("");
         return;
       }
-      const va = (r as any).virtualAccount as string;
-      const token = (r as any).verifyToken as string;
+      const va = r.virtualAccount as string;
+      const token = r.verifyToken as string;
       setVirtualAccount(va);
-      setVerifyToken(token);
-      // 立即提交：寫回 Ragic + 推 VA 卡 + 發 n8n
-      const sr = await submit.mutateAsync({
-        uid: uid || undefined,
+      // 立即提交：tenant-form-liff 端寫回 Ragic + 推 VA 卡 + 發 n8n
+      const sr = await postJson("/submit", {
+        uid: uid || "",
         name: nameInput.trim(),
         phone: normalizedPhone,
         idNumber: idNumber.trim().toUpperCase(),
@@ -133,6 +158,8 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
       setSub("done");
     } catch (err: any) {
       toast.error(err?.message || "驗證失敗，請稍後重試");
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -181,8 +208,8 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
               <Input value={job} onChange={(e) => setJob(e.target.value)} className="mt-1.5 h-11" placeholder="例：軟體工程師" />
             </div>
             <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
-              onClick={handleSendOtp} disabled={sendOtp.isPending}>
-              {sendOtp.isPending ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />發送中...</>) : "發送驗證碼"}
+              onClick={handleSendOtp} disabled={sending}>
+              {sending ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />發送中...</>) : "發送驗證碼"}
             </Button>
             <p className="text-xs text-gray-400 text-center">我們將發送簡訊驗證碼至上方手機號碼以確認身份</p>
           </div>
@@ -193,7 +220,7 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
 
   // ─── otp 子步驟 ──────────────────────────────────────────────────────────
   if (sub === "otp") {
-    const busy = verifyOtp.isPending || submit.isPending;
+    const busy = verifying;
     return (
       <BookingContainer>
         <div className="flex-1 px-6 py-6 max-w-md mx-auto w-full">
@@ -219,14 +246,14 @@ export function RemittanceView({ template, name, phone, uid, onComplete }: Remit
             />
             <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
               onClick={handleVerify} disabled={busy || otp.length < 4}>
-              {busy ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />{submit.isPending ? "儲存中..." : "驗證中..."}</>) : "驗證並取得帳號"}
+              {busy ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />驗證中...</>) : "驗證並取得帳號"}
             </Button>
             <div className="flex items-center justify-center gap-3 text-sm">
               <button type="button" className="text-gray-400 hover:text-gray-600" onClick={() => setSub("form")}>返回修改</button>
               {!isForeign && (
                 <>
                   <span className="text-gray-300">|</span>
-                  <button type="button" disabled={countdown > 0 || sendOtp.isPending}
+                  <button type="button" disabled={countdown > 0 || sending}
                     className={countdown > 0 ? "text-gray-300" : "text-[#6B8E6B] hover:underline"}
                     onClick={handleResend}>
                     {countdown > 0 ? `重新發送 (${countdown})` : "重新發送驗證碼"}
