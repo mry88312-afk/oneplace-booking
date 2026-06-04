@@ -29,6 +29,12 @@ import {
   handleCreateTemplate,
   handleUpdateTemplate,
 } from "./bookingTemplateHandlers";
+import {
+  handleCheckTenant,
+  handleSendOtp,
+  handleVerifyOtp,
+  handleSubmitRemittance,
+} from "./renewalRemittanceHandlers";
 
 export const bookingRouter = router({
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
@@ -544,4 +550,46 @@ export const bookingRouter = router({
         slotDurationMinutes: slotDuration,
       };
     }),
+
+  // ─── 續約匯訂（線上付款設定）公開 API — P22a 從 tenant-form-liff 移植 ────────
+
+  /** 查詢租客是否已有固定虛擬帳號（不回傳帳號，需經 OTP 才核發） */
+  remittanceCheckTenant: publicProcedure
+    .input(z.object({ phone: z.string().regex(/^\d{8,15}$/) }))
+    .mutation(async ({ input }) => handleCheckTenant(input)),
+
+  /** 發送 OTP 簡訊（台灣手機走三竹；外國電話引導客服） */
+  remittanceSendOtp: publicProcedure
+    .input(z.object({ phone: z.string().min(8).max(15) }))
+    .mutation(async ({ input }) => handleSendOtp(input)),
+
+  /** 驗證 OTP → 核發虛擬帳號 + verifyToken */
+  remittanceVerifyOtp: publicProcedure
+    .input(z.object({ phone: z.string().min(8).max(15), otp: z.string().min(4).max(12) }))
+    .mutation(async ({ input }) => handleVerifyOtp(input)),
+
+  /** 提交付款設定：upsert 租客主檔 + 推 VA 卡 + 發 n8n（需 verifyToken） */
+  remittanceSubmit: publicProcedure
+    .input(
+      z.object({
+        uid: z.string().optional(),
+        name: z.string().min(1),
+        phone: z.string().regex(/^\d{8,15}$/),
+        idNumber: z.string().min(1),
+        email: z.string().email(),
+        job: z.string().min(1),
+        virtualAccount: z.string().min(1),
+        verifyToken: z.string().min(1),
+        lineProfile: z
+          .object({
+            userId: z.string().optional(),
+            displayName: z.string().nullable().optional(),
+            pictureUrl: z.string().nullable().optional(),
+            statusMessage: z.string().nullable().optional(),
+          })
+          .nullable()
+          .optional(),
+      }),
+    )
+    .mutation(async ({ input }) => handleSubmitRemittance(input)),
 });
