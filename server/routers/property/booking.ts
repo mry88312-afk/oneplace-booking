@@ -1,14 +1,15 @@
 /**
- * 公開預約 router — 只包含 publicProcedure（租客端使用）
+ * 預約 router
+ * - 租客端 publicProcedure（取模版、驗證、查時段、確認預約）
+ * - 後台 adminProcedure（模版 CRUD、預約清單、取消、日曆驗證）— P19a 從主系統搬入
  *
- * 從主系統 oneplace-service 的 server/routers/property/booking.ts 拆出，
- * 移除所有 protectedProcedure（模版管理、預約列表、日曆驗證等留在主系統）。
+ * 模版資料來源：DB 優先 + hardcode fallback（見 bookingHelpers.resolveTemplateBundle）
  */
 import { z } from "zod";
-import { router, publicProcedure } from "../../_core/trpc";
+import { router, publicProcedure, adminProcedure } from "../../_core/trpc";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
   handleGetAvailableSlots,
@@ -19,72 +20,298 @@ import {
   handleVerifyTenantUid,
   handleVerifyByPhone,
 } from "./bookingVerifyHandlers";
-import { getLockedBundle } from "../../config/lockedTemplates";
+import {
+  resolveTemplateBundle,
+  getCalendarClient,
+  loadServiceAccountCredentials,
+} from "./bookingHelpers";
+import {
+  handleCreateTemplate,
+  handleUpdateTemplate,
+} from "./bookingTemplateHandlers";
 
 export const bookingRouter = router({
+  // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
+
+  /** 列出所有模版 */
+  listTemplates: adminProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    return db
+      .select()
+      .from(schema.bookingTemplates)
+      .orderBy(desc(schema.bookingTemplates.createdAt));
+  }),
+
+  /** 取得單一模版（含分流規則和表單欄位） */
+  getTemplate: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
+
+      const [template] = await db
+        .select()
+        .from(schema.bookingTemplates)
+        .where(eq(schema.bookingTemplates.id, input.id));
+      if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "模版不存在" });
+
+      const rules = await db
+        .select()
+        .from(schema.calendarRoutingRules)
+        .where(eq(schema.calendarRoutingRules.templateId, input.id))
+        .orderBy(schema.calendarRoutingRules.sortOrder);
+
+      const fields = await db
+        .select()
+        .from(schema.bookingFormFields)
+        .where(eq(schema.bookingFormFields.templateId, input.id))
+        .orderBy(schema.bookingFormFields.sortOrder);
+
+      return { ...template, rules, fields };
+    }),
+
+  /** 建立模版 */
+  createTemplate: adminProcedure
+    .input(
+      z.object({
+        projectId: z.string().min(1).max(128),
+        name: z.string().min(1).max(255),
+        templateType: z.string().min(1).max(64),
+        liffId: z.string().optional(),
+        ragicSearchPath: z.string().min(1),
+        ragicUidField: z.string().min(1),
+        ragicTaskPath: z.string().min(1),
+        slotDurationMinutes: z.number().int().min(10).max(480).default(60),
+        bookableDaysAhead: z.number().int().min(1).max(90).default(14),
+        dailyStartTime: z.string().regex(/^\d{2}:\d{2}$/).default("09:00"),
+        dailyEndTime: z.string().regex(/^\d{2}:\d{2}$/).default("18:00"),
+        bufferMinutes: z.number().int().min(0).max(120).default(0),
+        bufferDirection: z.enum(["before", "after", "both"]).default("after"),
+        weeklyHours: z.record(z.string(), z.object({ start: z.string(), end: z.string() }).nullable()).optional(),
+        instructionEnabled: z.boolean().optional().default(false),
+        instructionText: z.string().optional().nullable(),
+        minLeadDays: z.number().int().min(0).max(30).default(0),
+        rules: z.array(
+          z.object({
+            days: z.array(z.number().int().min(0).max(6)),
+            calendarId: z.string().min(1),
+            calendarLabel: z.string().optional().nullable(),
+            ownerName: z.string().min(1),
+            weeklyStartTime: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+            weeklyEndTime: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+          }),
+        ).min(1),
+        fields: z.array(
+          z.object({
+            fieldType: z.enum(["text", "select", "file", "description", "checkbox", "line_uid", "inbox_url"]),
+            label: z.string().default(""),
+            isRequired: z.boolean().default(false),
+            options: z.array(z.string()).optional().nullable(),
+            ragicFieldId: z.string().optional().nullable(),
+            descriptionText: z.string().optional().nullable(),
+            allowOther: z.boolean().optional().default(false),
+            selectionMode: z.enum(["radio", "checkbox"]).optional().default("checkbox"),
+          }),
+        ).optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      return handleCreateTemplate(input);
+    }),
+
+  /** 更新模版 */
+  updateTemplate: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().min(1).max(255).optional(),
+        templateType: z.string().min(1).max(64).optional(),
+        liffId: z.string().optional().nullable(),
+        ragicSearchPath: z.string().min(1).optional(),
+        ragicUidField: z.string().min(1).optional(),
+        ragicTaskPath: z.string().min(1).optional(),
+        slotDurationMinutes: z.number().int().min(10).max(480).optional(),
+        bookableDaysAhead: z.number().int().min(1).max(90).optional(),
+        dailyStartTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+        dailyEndTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+        bufferMinutes: z.number().int().min(0).max(120).optional(),
+        bufferDirection: z.enum(["before", "after", "both"]).optional(),
+        weeklyHours: z.record(z.string(), z.object({ start: z.string(), end: z.string() }).nullable()).optional(),
+        instructionEnabled: z.boolean().optional(),
+        instructionText: z.string().optional().nullable(),
+        minLeadDays: z.number().int().min(0).max(30).optional(),
+        isActive: z.boolean().optional(),
+        rules: z.array(
+          z.object({
+            days: z.array(z.number().int().min(0).max(6)),
+            calendarId: z.string().min(1),
+            calendarLabel: z.string().optional().nullable(),
+            ownerName: z.string().min(1),
+            weeklyStartTime: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+            weeklyEndTime: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+          }),
+        ).optional(),
+        fields: z.array(
+          z.object({
+            fieldType: z.enum(["text", "select", "file", "description", "checkbox", "line_uid", "inbox_url"]),
+            label: z.string().default(""),
+            isRequired: z.boolean().default(false),
+            options: z.array(z.string()).optional().nullable(),
+            ragicFieldId: z.string().optional().nullable(),
+            descriptionText: z.string().optional().nullable(),
+            allowOther: z.boolean().optional().default(false),
+            selectionMode: z.enum(["radio", "checkbox"]).optional().default("checkbox"),
+          }),
+        ).optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      return handleUpdateTemplate(input);
+    }),
+
+  /** 刪除模版 */
+  deleteTemplate: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.delete(schema.calendarRoutingRules).where(eq(schema.calendarRoutingRules.templateId, input.id));
+      await db.delete(schema.bookingFormFields).where(eq(schema.bookingFormFields.templateId, input.id));
+      await db.delete(schema.bookingTemplates).where(eq(schema.bookingTemplates.id, input.id));
+      return { success: true };
+    }),
+
+  /** 預約清單（Zeabur 無 users 表，不 join，直接用 tenantName） */
+  listBookings: adminProcedure
+    .input(
+      z.object({
+        templateId: z.number().optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      }),
+    )
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const base = db.select().from(schema.bookingRecords);
+      if (input.templateId) {
+        return base
+          .where(eq(schema.bookingRecords.templateId, input.templateId))
+          .orderBy(desc(schema.bookingRecords.bookingTime))
+          .limit(input.limit);
+      }
+      return base
+        .orderBy(desc(schema.bookingRecords.bookingTime))
+        .limit(input.limit);
+    }),
+
+  /** 取消預約（同時刪 Google Calendar 事件） */
+  cancelBooking: adminProcedure
+    .input(z.object({ id: z.number(), reason: z.string().optional() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [booking] = await db
+        .select()
+        .from(schema.bookingRecords)
+        .where(eq(schema.bookingRecords.id, input.id));
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND" });
+
+      if (booking.googleEventId && booking.googleCalendarId) {
+        try {
+          const calendar = getCalendarClient();
+          await calendar.events.delete({
+            calendarId: booking.googleCalendarId,
+            eventId: booking.googleEventId,
+          });
+          console.log(`[Booking] Deleted Google Calendar event: ${booking.googleEventId}`);
+        } catch (err: any) {
+          console.error("[Booking] Failed to delete calendar event:", err.message);
+        }
+      }
+
+      await db
+        .update(schema.bookingRecords)
+        .set({ status: "cancelled", cancelReason: input.reason || null })
+        .where(eq(schema.bookingRecords.id, input.id));
+      return { success: true };
+    }),
+
+  /** 驗證 Google Calendar 是否可存取 */
+  validateCalendar: adminProcedure
+    .input(z.object({ calendarId: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      try {
+        const credentials = loadServiceAccountCredentials();
+        const serviceAccountEmail = credentials.client_email || "未知";
+        const calendar = getCalendarClient();
+        const now = new Date();
+        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+        const freeBusyResp = await calendar.freebusy.query({
+          requestBody: {
+            timeMin: now.toISOString(),
+            timeMax: tomorrow.toISOString(),
+            timeZone: "Asia/Taipei",
+            items: [{ id: input.calendarId }],
+          },
+        });
+
+        const calendarData = freeBusyResp.data.calendars?.[input.calendarId];
+        const errors = calendarData?.errors;
+        if (errors && errors.length > 0) {
+          const errorMsg = errors.map((e: any) => e.reason || e.domain).join(", ");
+          return {
+            valid: false,
+            message: `日曆驗證失敗: ${errorMsg}。請在 Google Calendar 設定中將日曆共用給 ${serviceAccountEmail}（查看權限即可）`,
+            busyCount: 0,
+            serviceAccountEmail,
+          };
+        }
+        const busyCount = calendarData?.busy?.length || 0;
+        return {
+          valid: true,
+          message: `日曆驗證成功！未來 24 小時內有 ${busyCount} 個忙碌時段。`,
+          busyCount,
+          serviceAccountEmail,
+        };
+      } catch (err: any) {
+        let saEmail = "";
+        try {
+          const creds = loadServiceAccountCredentials();
+          saEmail = creds.client_email || "";
+        } catch { /* ignore */ }
+        return {
+          valid: false,
+          message: `日曆驗證失敗: ${err.message}${saEmail ? `。請確認日曆已共用給 ${saEmail}` : ""}`,
+          busyCount: 0,
+          serviceAccountEmail: saEmail,
+        };
+      }
+    }),
+
+  /** 取得 Service Account Email（前端顯示共用提示用） */
+  getServiceAccountEmail: adminProcedure.query(async () => {
+    try {
+      const credentials = loadServiceAccountCredentials();
+      return { email: credentials.client_email || "" };
+    } catch {
+      return { email: "" };
+    }
+  }),
+
+  // ─── 租客端公開 API ──────────────────────────────────────────────────────
+
   /** 取得預約模版公開資訊（租客端用） */
   getPublicTemplate: publicProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ input }) => {
-      // P18: 退租/續約 走 hardcode，不打 DB
-      const lockedBundle = getLockedBundle(input.projectId);
-      let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-      let fields: (typeof schema.bookingFormFields.$inferSelect)[] = [];
-      let rules: (typeof schema.calendarRoutingRules.$inferSelect)[] = [];
-
-      if (lockedBundle && lockedBundle.template.isActive) {
-        template = lockedBundle.template;
-        fields = lockedBundle.fields;
-        rules = lockedBundle.rules;
-      } else {
-        let db: Awaited<ReturnType<typeof getDb>>;
-        try {
-          db = await getDb();
-        } catch (err: any) {
-          console.error("[Booking-Public] DB connection failed:", err?.message);
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "SERVICE_UNAVAILABLE",
-          });
-        }
-        if (!db)
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "SERVICE_UNAVAILABLE",
-          });
-
-        try {
-          const [row] = await db
-            .select()
-            .from(schema.bookingTemplates)
-            .where(
-              and(
-                eq(schema.bookingTemplates.projectId, input.projectId),
-                eq(schema.bookingTemplates.isActive, true),
-              ),
-            );
-          template = row;
-          if (template) {
-            fields = await db
-              .select()
-              .from(schema.bookingFormFields)
-              .where(eq(schema.bookingFormFields.templateId, template.id))
-              .orderBy(schema.bookingFormFields.sortOrder);
-            rules = await db
-              .select()
-              .from(schema.calendarRoutingRules)
-              .where(eq(schema.calendarRoutingRules.templateId, template.id));
-          }
-        } catch (err: any) {
-          console.error("[Booking-Public] DB query failed:", err?.message);
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "SERVICE_UNAVAILABLE",
-          });
-        }
-      }
-      if (!template)
+      // DB 優先 + hardcode fallback（退租/續約 DB 掛了仍可服務）
+      const bundle = await resolveTemplateBundle(input.projectId);
+      if (!bundle)
         throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在或已停用" });
+      const { template, fields, rules } = bundle;
 
       const allRoutingDays = Array.from(
         new Set(rules.flatMap((r) => r.days as number[])),
@@ -244,10 +471,6 @@ export const bookingRouter = router({
       }),
     )
     .query(async ({ input }) => {
-      // P18: 退租/續約 走 hardcode；其他 templateType 才連 DB
-      const lockedBundle = getLockedBundle(input.projectId);
-      const db = lockedBundle ? null : await getDb();
-      if (!lockedBundle && !db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       let year: number, month: number, day: number, hour: number, minute: number;
       if (input.t.length === 12) {
         year = parseInt(input.t.slice(0, 4));
@@ -279,33 +502,11 @@ export const bookingRouter = router({
       const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
       const startTimeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 
-      let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-      let rules: (typeof schema.calendarRoutingRules.$inferSelect)[] = [];
-      if (lockedBundle && lockedBundle.template.isActive) {
-        template = lockedBundle.template;
-        rules = [...lockedBundle.rules].sort(
-          (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
-        );
-      } else if (db) {
-        const [row] = await db
-          .select()
-          .from(schema.bookingTemplates)
-          .where(
-            and(
-              eq(schema.bookingTemplates.projectId, input.projectId),
-              eq(schema.bookingTemplates.isActive, true),
-            ),
-          );
-        template = row;
-        if (template) {
-          rules = await db
-            .select()
-            .from(schema.calendarRoutingRules)
-            .where(eq(schema.calendarRoutingRules.templateId, template.id))
-            .orderBy(schema.calendarRoutingRules.sortOrder);
-        }
-      }
-      if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
+      // DB 優先 + hardcode fallback
+      const bundle = await resolveTemplateBundle(input.projectId);
+      if (!bundle) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
+      const template = bundle.template;
+      const rules = bundle.rules;
 
       const slotDuration = template.slotDurationMinutes || 60;
       const startMs = new Date(`${date}T${startTimeStr}:00+08:00`).getTime();

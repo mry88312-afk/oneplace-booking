@@ -7,6 +7,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { TRPCError } from "@trpc/server";
+import { eq, and } from "drizzle-orm";
+import { getDb } from "../../db";
+import * as schema from "../../../drizzle/schema";
+import { getLockedBundle, type LockedBundle } from "../../config/lockedTemplates";
 
 const __filename_local = fileURLToPath(import.meta.url);
 const __dirname_local = path.dirname(__filename_local);
@@ -313,3 +317,55 @@ export async function ragicUploadFile(
 }
 
 export const RAGIC_API_KEY_VALUE = RAGIC_API_KEY;
+
+/**
+ * P19a: 統一的模版解析器 — DB 優先，hardcode fallback。
+ *
+ * - 後台在 DB 改了設定 → DB 命中 → 立即生效
+ * - DB 連線失敗 / 該 projectId 不在 DB → fallback 到 lockedTemplates 的 hardcode（退租/續約保險絲）
+ * - 都找不到 → 回 null（呼叫端轉 NOT_FOUND）
+ *
+ * 回傳 { template, fields, rules }（fields/rules 已按 sortOrder 排序），與 LockedBundle 結構一致。
+ */
+export async function resolveTemplateBundle(
+  projectId: string,
+): Promise<LockedBundle | null> {
+  // 1) DB 優先
+  try {
+    const db = await getDb();
+    if (db) {
+      const [template] = await db
+        .select()
+        .from(schema.bookingTemplates)
+        .where(
+          and(
+            eq(schema.bookingTemplates.projectId, projectId),
+            eq(schema.bookingTemplates.isActive, true),
+          ),
+        );
+      if (template) {
+        const fields = await db
+          .select()
+          .from(schema.bookingFormFields)
+          .where(eq(schema.bookingFormFields.templateId, template.id))
+          .orderBy(schema.bookingFormFields.sortOrder);
+        const rules = await db
+          .select()
+          .from(schema.calendarRoutingRules)
+          .where(eq(schema.calendarRoutingRules.templateId, template.id))
+          .orderBy(schema.calendarRoutingRules.sortOrder);
+        return { template, fields, rules };
+      }
+    }
+  } catch (err: any) {
+    console.error(
+      "[resolveTemplateBundle] DB error, fallback to hardcode:",
+      err?.message,
+    );
+  }
+
+  // 2) fallback hardcode（退租/續約）
+  const locked = getLockedBundle(projectId);
+  if (locked && locked.template.isActive) return locked;
+  return null;
+}

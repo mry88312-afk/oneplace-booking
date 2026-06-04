@@ -15,8 +15,8 @@ import { eq, and } from "drizzle-orm";
 import {
   getTaipeiDayOfWeek,
   getCalendarClient,
+  resolveTemplateBundle,
 } from "./bookingHelpers";
-import { getLockedBundle } from "../../config/lockedTemplates";
 
 // ─── 共用：從 Events API 取得忙碌時段 ──────────────────────────────────────
 
@@ -125,34 +125,11 @@ export async function handleGetAvailableSlots(input: {
   projectId: string;
   date: string;
 }) {
-  // P18: 退租/續約 走 hardcode；其他才連 DB
-  const lockedBundle = getLockedBundle(input.projectId);
-  let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-  let rules: (typeof schema.calendarRoutingRules.$inferSelect)[] = [];
-  if (lockedBundle && lockedBundle.template.isActive) {
-    template = lockedBundle.template;
-    rules = lockedBundle.rules;
-  } else {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [row] = await db
-      .select()
-      .from(schema.bookingTemplates)
-      .where(
-        and(
-          eq(schema.bookingTemplates.projectId, input.projectId),
-          eq(schema.bookingTemplates.isActive, true)
-        )
-      );
-    template = row;
-    if (template) {
-      rules = await db
-        .select()
-        .from(schema.calendarRoutingRules)
-        .where(eq(schema.calendarRoutingRules.templateId, template.id));
-    }
-  }
-  if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
+  // DB 優先 + hardcode fallback
+  const bundle = await resolveTemplateBundle(input.projectId);
+  if (!bundle) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
+  const template = bundle.template;
+  const rules = bundle.rules;
 
   const dayOfWeek = getTaipeiDayOfWeek(input.date);
 
@@ -348,34 +325,11 @@ export async function handleGetAvailableSlotsMultiDay(input: {
   projectId: string;
   dates: string[];
 }) {
-  // P18: 退租/續約 走 hardcode；其他才連 DB
-  const lockedBundle = getLockedBundle(input.projectId);
-  let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-  let rules: (typeof schema.calendarRoutingRules.$inferSelect)[] = [];
-  if (lockedBundle && lockedBundle.template.isActive) {
-    template = lockedBundle.template;
-    rules = lockedBundle.rules;
-  } else {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [row] = await db
-      .select()
-      .from(schema.bookingTemplates)
-      .where(
-        and(
-          eq(schema.bookingTemplates.projectId, input.projectId),
-          eq(schema.bookingTemplates.isActive, true)
-        )
-      );
-    template = row;
-    if (template) {
-      rules = await db
-        .select()
-        .from(schema.calendarRoutingRules)
-        .where(eq(schema.calendarRoutingRules.templateId, template.id));
-    }
-  }
-  if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
+  // DB 優先 + hardcode fallback
+  const bundle = await resolveTemplateBundle(input.projectId);
+  if (!bundle) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
+  const template = bundle.template;
+  const rules = bundle.rules;
 
   const weeklyHours = (template as any).weeklyHours as Record<string, { start: string; end: string } | null> | null;
   const bufferMin = template.bufferMinutes || 0;

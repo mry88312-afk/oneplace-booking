@@ -10,8 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
-import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap } from "./bookingHelpers";
-import { getLockedBundle, getLockedFields } from "../../config/lockedTemplates";
+import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap, resolveTemplateBundle } from "./bookingHelpers";
 
 /**
  * Fallback：直接打 LINE Messaging API push message
@@ -94,22 +93,11 @@ export async function handleConfirmBooking(
     });
   }
 
-  // 取得模版（P18: 退租/續約 走 hardcode）
-  const lockedBundle = getLockedBundle(input.projectId);
-  let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-  if (lockedBundle) {
-    template = lockedBundle.template;
-  } else {
-    const [row] = await db
-      .select()
-      .from(schema.bookingTemplates)
-      .where(eq(schema.bookingTemplates.projectId, input.projectId));
-    template = row;
-  }
-  if (!template)
-    throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
-  if (!template.isActive)
-    throw new TRPCError({ code: "NOT_FOUND", message: "預約專案已停用" });
+  // 取得模版（DB 優先 + hardcode fallback；resolveTemplateBundle 已過濾 isActive）
+  const bundle = await resolveTemplateBundle(input.projectId);
+  if (!bundle)
+    throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在或已停用" });
+  const template = bundle.template;
 
   // 1. 寫入 Ragic 任務表
   let ragicRecordId = "";
@@ -131,11 +119,7 @@ export async function handleConfirmBooking(
     };
 
     const fileFieldsToUpload: Array<{ fieldId: string; fileUrl: string }> = [];
-    const lockedFields = getLockedFields(template.id);
-    const allFields = lockedFields ?? (await db
-      .select()
-      .from(schema.bookingFormFields)
-      .where(eq(schema.bookingFormFields.templateId, template.id)));
+    const allFields = bundle.fields;
 
     for (const field of allFields) {
       if (
