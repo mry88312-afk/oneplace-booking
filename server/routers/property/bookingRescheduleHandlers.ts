@@ -143,7 +143,7 @@ export async function handleCancelBookingPublic(input: { bookingId: number; uid:
   if (record.ragicRecordId) {
     const numericId = Number(record.ragicRecordId);
     if (!isNaN(numericId) && numericId > 0) {
-      const buttonId = process.env.RAGIC_CANCEL_BUTTON_ID;
+      const buttonId = process.env.RAGIC_CANCEL_BUTTON_ID || "42"; // go-back/1 取消動作按鈕 bId
       try {
         if (buttonId) {
           await ragicExecuteButton(template.ragicTaskPath, numericId, buttonId);
