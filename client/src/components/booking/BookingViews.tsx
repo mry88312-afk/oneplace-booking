@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import {
   Clock, CheckCircle2, ChevronLeft, Loader2, AlertCircle,
   MapPin, Upload, FileText, X, Globe, Phone, User, CalendarPlus,
+  AlertTriangle, XCircle,
 } from "lucide-react";
 import {
   BookingContainer, SuccessAnimation, LiffFailedAutoRedirect,
@@ -547,6 +548,72 @@ export function InstructionView({
           onClick={onNext}>
           下一步
         </Button>
+      </div>
+    </BookingContainer>
+  );
+}
+
+// ─── Cancel View（取消確認 / 已取消）────────────────────────────────────────
+
+interface CancelViewProps {
+  templateType: string;
+  tenantName: string;
+  roomNumber: string;
+  currentBookingTime: number; // epoch ms
+  isCancelling: boolean;
+  cancelled: boolean;
+  onConfirm: () => void;
+}
+
+function formatEpochTaipei(ms: number): string {
+  if (!ms) return "";
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(ms));
+}
+
+export function CancelView({
+  templateType, tenantName, roomNumber, currentBookingTime, isCancelling, cancelled, onConfirm,
+}: CancelViewProps) {
+  if (cancelled) {
+    return (
+      <BookingContainer>
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="w-full max-w-sm text-center">
+            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-5">
+              <XCircle className="h-9 w-9 text-gray-400" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">已取消{templateType}</h2>
+            <p className="text-sm text-gray-500">您的{templateType}預約已取消，如需重新預約請聯繫一方或重新開啟連結。</p>
+          </div>
+        </div>
+      </BookingContainer>
+    );
+  }
+  return (
+    <BookingContainer>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6">
+            <div className="w-14 h-14 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle className="h-7 w-7 text-red-500" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">取消{templateType}</h1>
+            <p className="text-sm text-gray-500">確定要取消這筆{templateType}預約嗎？此動作無法復原。</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-5 space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-gray-400">類型</span><span className="font-semibold text-gray-900">{templateType}</span></div>
+            <div className="flex justify-between"><span className="text-gray-400">姓名</span><span className="font-semibold text-gray-900">{tenantName}</span></div>
+            {roomNumber && <div className="flex justify-between"><span className="text-gray-400">房間</span><span className="font-semibold text-gray-900">{roomNumber}</span></div>}
+            <div className="flex justify-between"><span className="text-gray-400">時間</span><span className="font-semibold text-gray-900">{formatEpochTaipei(currentBookingTime)}</span></div>
+          </div>
+          <Button className="w-full h-12 mt-6 bg-red-500 hover:bg-red-600 text-white rounded-full font-semibold text-base"
+            onClick={onConfirm} disabled={isCancelling}>
+            {isCancelling ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />取消中...</>) : `確定取消${templateType}`}
+          </Button>
+          <p className="text-xs text-gray-400 text-center mt-3">若只是想換時間，請改用卡片上的「變更時間」</p>
+        </div>
       </div>
     </BookingContainer>
   );

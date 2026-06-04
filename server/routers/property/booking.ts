@@ -29,6 +29,11 @@ import {
   handleCreateTemplate,
   handleUpdateTemplate,
 } from "./bookingTemplateHandlers";
+import {
+  handleGetBookingForReschedule,
+  handleCancelBookingPublic,
+  handleRescheduleBooking,
+} from "./bookingRescheduleHandlers";
 
 export const bookingRouter = router({
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
@@ -544,4 +549,31 @@ export const bookingRouter = router({
         slotDurationMinutes: slotDuration,
       };
     }),
+
+  // ─── 預約卡片動作：取消 / 變更時間（P23，退租+續約共用）──────────────────
+
+  /** 改期前取得預約基本資料（uid 比對） */
+  getBookingForReschedule: publicProcedure
+    .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1) }))
+    .query(async ({ input }) => handleGetBookingForReschedule(input)),
+
+  /** 取消預約：硬刪除 Ragic 任務 + 標記取消（uid 比對） */
+  cancelBookingPublic: publicProcedure
+    .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1) }))
+    .mutation(async ({ input }) => handleCancelBookingPublic(input)),
+
+  /** 變更時間：更新 Ragic 任務日期 + 本地紀錄（uid 比對） */
+  rescheduleBooking: publicProcedure
+    .input(
+      z.object({
+        bookingId: z.number().int(),
+        uid: z.string().min(1),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        startTime: z.string(),
+        endTime: z.string(),
+        calendarId: z.string(),
+        assigneeName: z.string(),
+      }),
+    )
+    .mutation(async ({ input }) => handleRescheduleBooking(input)),
 });

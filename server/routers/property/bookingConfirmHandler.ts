@@ -338,7 +338,7 @@ export async function handleConfirmBooking(
               },
               {
                 type: "text",
-                text: "如需取消或變更，請聯繫我們",
+                text: "可使用下方按鈕變更時間或取消",
                 size: "xs",
                 color: "#AAAAAA",
                 margin: "lg",
@@ -347,6 +347,40 @@ export async function handleConfirmBooking(
             ],
             paddingAll: "20px",
           },
+          // P23：退租/續約卡片動作按鈕（需 template 有 liffId 才顯示）
+          ...(template.liffId
+            ? {
+                footer: {
+                  type: "box",
+                  layout: "vertical",
+                  spacing: "sm",
+                  contents: [
+                    {
+                      type: "button",
+                      style: "primary",
+                      height: "sm",
+                      color: "#4A6741",
+                      action: {
+                        type: "uri",
+                        label: `變更${template.templateType}時間`,
+                        uri: `https://liff.line.me/${template.liffId}?reschedule=${record.insertId}`,
+                      },
+                    },
+                    {
+                      type: "button",
+                      style: "secondary",
+                      height: "sm",
+                      action: {
+                        type: "uri",
+                        label: `取消${template.templateType}`,
+                        uri: `https://liff.line.me/${template.liffId}?cancel=${record.insertId}`,
+                      },
+                    },
+                  ],
+                  paddingAll: "16px",
+                },
+              }
+            : {}),
           styles: {
             header: { separator: false },
           },

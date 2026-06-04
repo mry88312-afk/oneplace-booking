@@ -9,6 +9,7 @@ export {
   InstructionView,
   FormView,
   SuccessView,
+  CancelView,
 } from "./BookingViews";
 export {
   getTaipeiNow,

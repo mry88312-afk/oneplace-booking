@@ -11,7 +11,7 @@ import {
 } from "@/components/booking";
 import {
   VerifyView, PhoneView, RegisterView, RemittanceView,
-  CalendarViewPage, SlotsView, InstructionView, FormView, SuccessView,
+  CalendarViewPage, SlotsView, InstructionView, FormView, SuccessView, CancelView,
 } from "@/components/booking";
 
 export default function BookingPublic() {
@@ -31,6 +31,19 @@ export default function BookingPublic() {
     return /^(\d{8}|\d{12})$/.test(t) ? t : "";
   });
   const isPresetMode = /^(\d{8}|\d{12})$/.test(presetT);
+
+  // P23：卡片動作模式（?reschedule=<bookingId> 變更時間 / ?cancel=<bookingId> 取消）
+  const [actionMode, setActionMode] = useState<"none" | "reschedule" | "cancel">(() => {
+    if (initialParams.get("reschedule")) return "reschedule";
+    if (initialParams.get("cancel")) return "cancel";
+    return "none";
+  });
+  const [actionBookingId, setActionBookingId] = useState<number | null>(() => {
+    const v = initialParams.get("reschedule") || initialParams.get("cancel");
+    const n = v ? parseInt(v, 10) : NaN;
+    return !isNaN(n) ? n : null;
+  });
+  const isActionMode = actionMode !== "none";
 
   const [view, setView] = useState<PageView>("verify");
   const [uid, setUid] = useState(uidFromUrl);
@@ -66,6 +79,13 @@ export default function BookingPublic() {
   // P22b 續約付款設定（匯訂）— 只在 renewal 啟用，verify 後、選時段前插入
   const [remittanceDone, setRemittanceDone] = useState(false);
   const [verifiedPhone, setVerifiedPhone] = useState("");
+  // P23 卡片動作
+  const [actionCancelled, setActionCancelled] = useState(false);
+  const [actionTenantName, setActionTenantName] = useState("");
+  const [actionRoomNumber, setActionRoomNumber] = useState("");
+  const [actionBookingTime, setActionBookingTime] = useState(0);
+  const [actionTemplateType, setActionTemplateType] = useState("");
+  const actionStartedRef = useRef(false);
 
   const templateQuery = trpc.booking.getPublicTemplate.useQuery(
     { projectId },
@@ -241,6 +261,21 @@ export default function BookingPublic() {
     onError: (err) => { toast.error(err.message || "預約失敗"); setIsBooking(false); },
   });
 
+  // P23：卡片動作（變更時間 / 取消）
+  const effectiveActionUid = lineUserId || uid;
+  const rescheduleInfoQuery = trpc.booking.getBookingForReschedule.useQuery(
+    { bookingId: actionBookingId!, uid: effectiveActionUid! },
+    { enabled: isActionMode && !!actionBookingId && !!effectiveActionUid, retry: false },
+  );
+  const cancelMutation = trpc.booking.cancelBookingPublic.useMutation({
+    onSuccess: () => setActionCancelled(true),
+    onError: (err) => toast.error(err.message || "取消失敗"),
+  });
+  const rescheduleMutation = trpc.booking.rescheduleBooking.useMutation({
+    onSuccess: (data) => { setBookingResult({ success: true, bookingId: data.bookingId }); setView("success"); setIsBooking(false); },
+    onError: (err) => { toast.error(err.message || "變更失敗"); setIsBooking(false); },
+  });
+
   // LIFF init
   useEffect(() => {
     const liffId = templateQuery.data?.liffId;
@@ -261,6 +296,13 @@ export default function BookingPublic() {
         const tParam = postInitParams.get("t") || "";
         console.log("[BOOKING] liff.init done — window.location.search:", window.location.search, "tParam:", tParam, "isLoggedIn:", liff.isLoggedIn(), "isInClient:", liff.isInClient());
         if (/^(\d{8}|\d{12})$/.test(tParam)) setPresetT(tParam);
+        // P23：改期/取消參數（格式 B：liff.state 還原後才讀得到）
+        const rs = postInitParams.get("reschedule");
+        const cc = postInitParams.get("cancel");
+        if (rs || cc) {
+          const n = parseInt(rs || cc || "", 10);
+          if (!isNaN(n)) { setActionBookingId(n); setActionMode(rs ? "reschedule" : "cancel"); }
+        }
 
         const isLoggedIn = liff.isLoggedIn();
         const isInClient = liff.isInClient();
@@ -290,10 +332,22 @@ export default function BookingPublic() {
     const hasLiffId = !!templateQuery.data?.liffId;
     const canVerify = hasLiffId ? liffReady : true;
     const effectiveUid = lineUserId || uidFromUrl;
-    if (effectiveUid && templateQuery.data && canVerify && view === "verify" && !isVerifying && !verifyMutation.isSuccess) {
+    if (!isActionMode && effectiveUid && templateQuery.data && canVerify && view === "verify" && !isVerifying && !verifyMutation.isSuccess) {
       handleVerify();
     }
   }, [uidFromUrl, lineUserId, templateQuery.data, liffReady]);
+
+  // P23：卡片動作模式 — 取得預約資料後直接路由（取消→確認頁；改期→選日期）
+  useEffect(() => {
+    if (!isActionMode || actionStartedRef.current) return;
+    const info = rescheduleInfoQuery.data;
+    if (!info) return;
+    actionStartedRef.current = true;
+    setTenantName(info.tenantName); setRoomNumber(info.roomNumber); setAddress(info.address || "");
+    setActionTenantName(info.tenantName); setActionRoomNumber(info.roomNumber);
+    setActionBookingTime(info.currentBookingTime); setActionTemplateType(info.templateType);
+    setView(actionMode === "cancel" ? "cancel" : "calendar");
+  }, [rescheduleInfoQuery.data, isActionMode, actionMode]);
 
   useEffect(() => {
     if (slotsQuery.data) { setCalendarOwner(slotsQuery.data.calendarOwner || ""); setCalendarId(slotsQuery.data.calendarId || ""); }
@@ -347,8 +401,27 @@ export default function BookingPublic() {
 
   const handleSelectDate = (date: string) => { setSelectedDate(date); setSelectedSlot(null); setConfirmedSlot(null); setView("slots"); };
   const handleSelectSlot = (slot: any) => setSelectedSlot(slot);
+
+  // P23：改期送出（更新 Ragic 日期，不開新任務）
+  const doReschedule = (slot: { startTime: string; endTime: string; calendarId?: string; calendarOwner?: string }) => {
+    if (!actionBookingId || !effectiveActionUid) return toast.error("缺少預約識別，請重新從卡片開啟");
+    setIsBooking(true);
+    rescheduleMutation.mutate({
+      bookingId: actionBookingId, uid: effectiveActionUid,
+      date: selectedDate, startTime: slot.startTime, endTime: slot.endTime,
+      calendarId: slot.calendarId || calendarId, assigneeName: slot.calendarOwner || calendarOwner,
+    });
+  };
+  // P23：取消送出
+  const handleCancelConfirm = () => {
+    if (!actionBookingId || !effectiveActionUid) return toast.error("缺少預約識別，請重新從卡片開啟");
+    cancelMutation.mutate({ bookingId: actionBookingId, uid: effectiveActionUid });
+  };
+
   const handleConfirmSlot = () => {
     if (!selectedSlot) return;
+    // 改期模式：選完時段直接更新，不走說明頁/問卷
+    if (actionMode === "reschedule") { setConfirmedSlot(selectedSlot); doReschedule(selectedSlot); return; }
     setConfirmedSlot(selectedSlot);
     if (template?.instructionEnabled && template?.instructionText) {
       setView("instruction");
@@ -502,6 +575,13 @@ export default function BookingPublic() {
   // Render
   if (templateQuery.isLoading) return <BookingLoadingScreen />;
   if (templateQuery.error || !template) return <BookingErrorScreen message={templateQuery.error?.message} />;
+
+  // P23 卡片動作模式：載入中 / 權限錯誤 / 取消確認
+  if (isActionMode) {
+    if (rescheduleInfoQuery.isError) return <BookingErrorScreen message={rescheduleInfoQuery.error?.message || "無法載入這筆預約"} />;
+    if (view === "verify") return <BookingLoadingScreen />;
+  }
+  if (view === "cancel") return <CancelView templateType={actionTemplateType || template.templateType} tenantName={actionTenantName} roomNumber={actionRoomNumber} currentBookingTime={actionBookingTime} isCancelling={cancelMutation.isPending} cancelled={actionCancelled} onConfirm={handleCancelConfirm} />;
 
   if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
   if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;

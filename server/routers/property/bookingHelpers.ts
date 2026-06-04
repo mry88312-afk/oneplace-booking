@@ -141,6 +141,29 @@ export async function ragicPut(ragicPath: string, ragicId: number, data: Record<
   return parsed;
 }
 
+/** Ragic 硬刪除一筆記錄（HTTP DELETE）。用於取消預約時刪掉任務表記錄。 */
+export async function ragicDelete(ragicPath: string, ragicId: number) {
+  const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?v=3&api=`;
+  console.log(`[Ragic Payload] DELETE ${ragicPath}/${ragicId}`);
+  const resp = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Basic ${RAGIC_API_KEY}` },
+  });
+  const text = await resp.text();
+  console.log(`[API Response] Ragic DELETE response (status=${resp.status}):`, text);
+  if (!resp.ok) {
+    console.error(`[API Response] Ragic DELETE FAILED: status=${resp.status}, body=${text}`);
+    throw new Error(`Ragic DELETE error: ${resp.status} - ${text}`);
+  }
+  let parsed: any;
+  try { parsed = JSON.parse(text); } catch { return { raw: text }; }
+  if (parsed?.status === "ERROR") {
+    console.error(`[API Response] Ragic DELETE body ERROR:`, parsed.msg || text);
+    throw new Error(`Ragic DELETE body error: ${parsed.msg || text}`);
+  }
+  return parsed;
+}
+
 /** 從 Ragic 房客記錄中提取房源資訊（for-system-use/2 表） */
 export function extractTenantInfo(record: any) {
   const tenantName = record["房客姓名1"] || record["姓名"] || record["租客姓名"] || record["Name"] || "";
