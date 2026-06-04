@@ -118,6 +118,14 @@ const trpcClient = trpc.createClient({
       transformer: superjson,
       methodOverride: "POST",
       fetch: safeFetch,
+      // 後台請求帶上密碼 header（租客端 sessionStorage 沒值就送空，public procedure 不檢查）
+      headers: () => {
+        const pw =
+          typeof window !== "undefined"
+            ? window.sessionStorage.getItem("adminPassword")
+            : null;
+        return pw ? { "x-admin-password": pw } : {};
+      },
     }),
   ],
 });

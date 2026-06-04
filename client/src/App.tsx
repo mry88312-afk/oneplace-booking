@@ -6,6 +6,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { Loader2 } from "lucide-react";
 
 const BookingPublic = lazy(() => import("./pages/BookingPublic"));
+const AdminGate = lazy(() => import("./pages/AdminGate"));
 
 function PageLoadingFallback() {
   return (
@@ -28,6 +29,7 @@ function Router() {
   return (
     <Suspense fallback={<PageLoadingFallback />}>
       <Switch>
+        <Route path="/admin" component={AdminGate} />
         <Route path="/book/:projectId" component={BookingPublic} />
         <Route path="/book">{() => <BookingNotFound />}</Route>
         <Route>{() => <BookingNotFound />}</Route>
