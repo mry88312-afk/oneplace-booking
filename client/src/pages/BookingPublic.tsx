@@ -87,6 +87,7 @@ export default function BookingPublic() {
   const [actionBookingTime, setActionBookingTime] = useState(0);
   const [actionTemplateType, setActionTemplateType] = useState("");
   const actionStartedRef = useRef(false);
+  const inFlightRef = useRef(false); // 防止重複送出（多次點 Confirm → 重複預約/多張卡片）
 
   const templateQuery = trpc.booking.getPublicTemplate.useQuery(
     { projectId },
@@ -261,6 +262,7 @@ export default function BookingPublic() {
       setView("success"); setIsBooking(false);
     },
     onError: (err) => { toast.error(err.message || "預約失敗"); setIsBooking(false); },
+    onSettled: () => { inFlightRef.current = false; },
   });
 
   // P23：卡片動作（變更時間 / 取消）
@@ -276,6 +278,7 @@ export default function BookingPublic() {
   const rescheduleMutation = trpc.booking.rescheduleBooking.useMutation({
     onSuccess: (data) => { setBookingResult({ success: true, bookingId: data.bookingId }); setView("success"); setIsBooking(false); },
     onError: (err) => { toast.error(err.message || "變更失敗"); setIsBooking(false); },
+    onSettled: () => { inFlightRef.current = false; },
   });
 
   // LIFF init
@@ -407,6 +410,8 @@ export default function BookingPublic() {
   // P23：改期送出（更新 Ragic 日期，不開新任務）
   const doReschedule = (slot: { startTime: string; endTime: string; calendarId?: string; calendarOwner?: string }) => {
     if (!actionBookingId || !effectiveActionUid) return toast.error("缺少預約識別，請重新從卡片開啟");
+    if (inFlightRef.current) return; // 防重複送出（多次點 Confirm → 多張卡片）
+    inFlightRef.current = true;
     setIsBooking(true);
     rescheduleMutation.mutate({
       bookingId: actionBookingId, uid: effectiveActionUid,
@@ -467,6 +472,8 @@ export default function BookingPublic() {
   };
 
   const doBooking = (slot: { startTime: string; endTime: string; calendarId?: string; calendarOwner?: string }) => {
+    if (inFlightRef.current) return; // 防重複送出
+    inFlightRef.current = true;
     setIsBooking(true);
     confirmMutation.mutate({
       projectId, uid: uid || lineUserId || phoneInput.trim() || "unknown",
@@ -591,7 +598,7 @@ export default function BookingPublic() {
   if (view === "register") return <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />;
   if (view === "remittance") return <RemittanceView template={template} name={tenantName} phone={verifiedPhone || phoneInput} uid={lineUserId || uid} onComplete={continueAfterRemittance} />;
   if (view === "calendar") return <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />;
-  if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} />;
+  if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} isBooking={isBooking} />;
   if (view === "instruction" && confirmedSlot) return <InstructionView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} onNext={handleInstructionNext} setView={setView} setConfirmedSlot={setConfirmedSlot} />;
   if (view === "form" && confirmedSlot) return <FormView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} formAnswers={formAnswers} setFormAnswers={setFormAnswers} fileUploads={fileUploads} setFileUploads={setFileUploads} isUploading={isUploading} isBooking={isBooking} handleFileUpload={handleFileUpload} handleConfirmBooking={handleConfirmBooking} setView={setView} setConfirmedSlot={setConfirmedSlot} isPreset={isPresetMode} />;
   if (view === "success" && bookingResult?.success) return <SuccessView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} selectedSlot={selectedSlot} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} calendarOwner={calendarOwner} />;

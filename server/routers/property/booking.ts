@@ -551,6 +551,46 @@ export const bookingRouter = router({
       };
     }),
 
+  /**
+   * 續約：把 deposit 產生的虛擬帳號（+可選 email/職業）寫回租客主檔 for-system-use/2。
+   * 走預約後端的 Ragic 寫入，不需 idNumber（租客既有資料不覆蓋姓名/身分證）。
+   */
+  writeRenewalVirtualAccount: publicProcedure
+    .input(
+      z.object({
+        uid: z.string().optional(),
+        phone: z.string().regex(/^\d{8,15}$/),
+        virtualAccount: z.string().min(1),
+        email: z.string().optional(),
+        job: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const { ragicGet, ragicPut, RAGIC_API_KEY_VALUE } = await import("./bookingHelpers");
+      if (!RAGIC_API_KEY_VALUE) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ragic API 尚未設定" });
+      }
+      const data = await ragicGet("for-system-use/2", { where: `1007372,eq,${input.phone}`, limit: "1" });
+      const recs = Object.values(data).filter((r: any) => r && r["_ragicId"] !== undefined) as any[];
+      if (recs.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "查無租客資料" });
+      }
+      const rec = recs[0];
+      // 安全：若記錄已綁 lineuid 且有帶 uid，需相符
+      if (input.uid && rec["lineuid"] && rec["lineuid"] !== input.uid) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "身份不符，無法寫入" });
+      }
+      const ragicId = Number(rec["_ragicId"]);
+      if (isNaN(ragicId)) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "租客記錄異常" });
+      }
+      const payload: Record<string, any> = { "1021087": input.virtualAccount };
+      if (input.email) payload["1007542"] = input.email;
+      if (input.job) payload["1007377"] = input.job;
+      await ragicPut("for-system-use/2", ragicId, payload);
+      return { success: true };
+    }),
+
   // ─── 預約卡片動作：取消 / 變更時間（P23，退租+續約共用）──────────────────
 
   /** 改期前取得預約基本資料（uid 比對） */

@@ -141,9 +141,10 @@ export async function ragicPut(ragicPath: string, ragicId: number, data: Record<
   return parsed;
 }
 
-/** Ragic 硬刪除一筆記錄（HTTP DELETE）。用於取消預約時刪掉任務表記錄。 */
+/** Ragic 硬刪除一筆記錄（HTTP DELETE）。用於取消預約時刪掉任務表記錄。
+ *  doWorkflow=true：讓刪除動作一併觸發 Ragic 後端 workflow / webhook。 */
 export async function ragicDelete(ragicPath: string, ragicId: number) {
-  const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?v=3&api=`;
+  const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?v=3&api=&doWorkflow=true`;
   console.log(`[Ragic Payload] DELETE ${ragicPath}/${ragicId}`);
   const resp = await fetch(url, {
     method: "DELETE",

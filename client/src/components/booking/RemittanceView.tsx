@@ -4,14 +4,16 @@
  * 機密邏輯（三竹 OTP、虛擬帳號產生、企業代碼）不在本 repo，
  * 而是直接呼叫既有的 tenant-form-liff 服務 API（固定 IP 已白名單、env/VA 邏輯只存在那台）。
  *
- * 子步驟：form（補個資→發OTP）→ otp（驗證→取VA+寫Ragic+推卡+n8n，全在那台）→ done（顯示VA）
+ * 續約版簡化：姓名/電話直接顯示既有資料、不收身分證；email/職業選填。
+ * 子步驟：form（顯示姓名+電話，選填 email/職業 → 發OTP）→ otp（驗證取VA）→ done（顯示VA）
  *
- * 對應 tenant-form-liff 端點：
- *   POST /api/send-otp   { phone, name?, email?, job? } → { success, message, isForeignPhone?, devMode? }
- *   POST /api/verify-otp { phone, otp }                 → { success, message, virtualAccount, verifyToken }
- *   POST /api/submit     { uid, name, phone, idNumber, email, job, virtualAccount, verifyToken, lineProfile } → { success }
+ * 端點：
+ *   deposit  POST /api/send-otp   { phone } → { success, isForeignPhone?, devMode? }
+ *   deposit  POST /api/verify-otp { phone, otp } → { success, virtualAccount }
+ *   booking  trpc writeRenewalVirtualAccount { uid?, phone, virtualAccount, email?, job? } → 寫回 Ragic（不需 idNumber）
  */
 import React, { useState, useEffect, useRef } from "react";
+import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,10 +57,9 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
   const normalizedPhone = (phone || "").replace(/\D/g, "");
   const [sub, setSub] = useState<"form" | "otp" | "done">("form");
 
-  const [nameInput, setNameInput] = useState(name || "");
-  const [idNumber, setIdNumber] = useState("");
   const [email, setEmail] = useState("");
   const [job, setJob] = useState("");
+  const writeVA = trpc.booking.writeRenewalVirtualAccount.useMutation();
 
   const [isForeign, setIsForeign] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(""));
@@ -107,17 +108,16 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
 
   const handleSendOtp = async () => {
-    if (!nameInput.trim()) return toast.error("請輸入姓名");
-    if (!idNumber.trim()) return toast.error("請輸入身分證字號或護照號碼");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return toast.error("請輸入有效的電子郵件");
-    if (!job.trim()) return toast.error("請輸入職業");
     if (!/^\d{8,15}$/.test(normalizedPhone)) {
-      return toast.error("檔內電話格式有誤，請改用電話驗證或聯繫客服");
+      return toast.error("檔內電話格式有誤，請聯繫客服");
+    }
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return toast.error("電子郵件格式有誤");
     }
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
-        phone: normalizedPhone, name: nameInput.trim(), email: email.trim(), job: job.trim(),
+        phone: normalizedPhone, name, email: email.trim(), job: job.trim(),
       });
       if (r.success) {
         if (r.devMode) toast.success("開發模式：請用固定驗證碼");
@@ -144,7 +144,7 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
-        phone: normalizedPhone, name: nameInput.trim(), email: email.trim(), job: job.trim(),
+        phone: normalizedPhone, name, email: email.trim(), job: job.trim(),
       });
       if (r.success) { toast.success("驗證碼已重新發送"); clearOtp(); startCountdown(); }
       else toast.error(r.message || "發送失敗");
@@ -166,21 +166,20 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
         return;
       }
       const va = r.virtualAccount as string;
-      const token = r.verifyToken as string;
       setVirtualAccount(va);
-      // 立即提交：tenant-form-liff 端寫回 Ragic + 推 VA 卡 + 發 n8n
-      const sr = await postJson("/submit", {
-        uid: uid || "",
-        name: nameInput.trim(),
-        phone: normalizedPhone,
-        idNumber: idNumber.trim().toUpperCase(),
-        email: email.trim(),
-        job: job.trim(),
-        virtualAccount: va,
-        verifyToken: token,
-        lineProfile: uid ? { userId: uid } : null,
-      });
-      if (!sr.success) { toast.error(sr.message || "資料儲存失敗"); return; }
+      // 把虛擬帳號（+可選 email/職業）寫回租客主檔；走預約後端，不需 idNumber、不覆蓋姓名
+      try {
+        await writeVA.mutateAsync({
+          uid: uid || undefined,
+          phone: normalizedPhone,
+          virtualAccount: va,
+          email: email.trim() || undefined,
+          job: job.trim() || undefined,
+        });
+      } catch (e: any) {
+        toast.error(e?.message || "帳號寫入失敗，請稍後再試");
+        return;
+      }
       setSub("done");
     } catch (err: any) {
       toast.error(err?.message || "驗證失敗，請稍後重試");
@@ -213,25 +212,25 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
             <p className="text-sm text-gray-500">完成付款設定，取得中信專屬固定式匯款帳號</p>
           </div>
           <div className="space-y-4">
+            {/* 姓名、電話直接顯示既有資料，不需填寫 */}
+            <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">姓名</span>
+                <span className="font-semibold text-gray-900">{name || "—"}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">手機號碼</span>
+                <span className="font-semibold text-gray-900">{normalizedPhone || "—"}</span>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">以下為選填，如需更新個人資料再填寫，否則留空即可。</p>
             <div>
-              <Label className="text-sm font-medium text-gray-700">姓名 <span className="text-red-500">*</span></Label>
-              <Input value={nameInput} onChange={(e) => setNameInput(e.target.value)} className="mt-1.5 h-11" placeholder="您的本名" />
+              <Label className="text-sm font-medium text-gray-700">電子郵件（選填）</Label>
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1.5 h-11" placeholder="如需更新再填" />
             </div>
             <div>
-              <Label className="text-sm font-medium text-gray-700">手機號碼</Label>
-              <input value={normalizedPhone} readOnly className="mt-1.5 h-11 w-full rounded-md border border-input bg-muted px-3 text-base text-gray-600" />
-            </div>
-            <div>
-              <Label className="text-sm font-medium text-gray-700">身分證字號 / 護照號碼 <span className="text-red-500">*</span></Label>
-              <Input value={idNumber} onChange={(e) => setIdNumber(e.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 12).toUpperCase())} className="mt-1.5 h-11" placeholder="A123456789" />
-            </div>
-            <div>
-              <Label className="text-sm font-medium text-gray-700">電子郵件 <span className="text-red-500">*</span></Label>
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1.5 h-11" placeholder="you@example.com" />
-            </div>
-            <div>
-              <Label className="text-sm font-medium text-gray-700">職業 <span className="text-red-500">*</span></Label>
-              <Input value={job} onChange={(e) => setJob(e.target.value)} className="mt-1.5 h-11" placeholder="例：軟體工程師" />
+              <Label className="text-sm font-medium text-gray-700">職業（選填）</Label>
+              <Input value={job} onChange={(e) => setJob(e.target.value)} className="mt-1.5 h-11" placeholder="如需更新再填" />
             </div>
             <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
               onClick={handleSendOtp} disabled={sending}>

@@ -258,11 +258,12 @@ interface SlotsViewProps {
   onConfirmSlot: () => void;
   setView: (v: PageView) => void;
   setSelectedSlot: (s: any) => void;
+  isBooking?: boolean;
 }
 
 export function SlotsView({
   template, selectedDate, selectedSlot, slotsQuery,
-  onSelectSlot, onConfirmSlot, setView, setSelectedSlot,
+  onSelectSlot, onConfirmSlot, setView, setSelectedSlot, isBooking = false,
 }: SlotsViewProps) {
   const availableSlots = (slotsQuery.data?.slots || []).filter((s: any) => s.available);
 
@@ -309,8 +310,9 @@ export function SlotsView({
                     {formatTime(slot.startTime)}
                   </button>
                   {isSelected && (
-                    <button type="button" className="px-6 py-4 rounded-lg bg-[#6B8E6B] text-white font-bold text-base transition-all hover:bg-[#5A7A5A]"
-                      style={{ animation: "fadeInUp 0.2s ease-out" }} onClick={onConfirmSlot}>Confirm</button>
+                    <button type="button" disabled={isBooking}
+                      className="px-6 py-4 rounded-lg bg-[#6B8E6B] text-white font-bold text-base transition-all hover:bg-[#5A7A5A] disabled:opacity-60 disabled:cursor-not-allowed"
+                      style={{ animation: "fadeInUp 0.2s ease-out" }} onClick={onConfirmSlot}>{isBooking ? "處理中…" : "Confirm"}</button>
                   )}
                 </div>
               );
