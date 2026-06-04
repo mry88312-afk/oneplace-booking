@@ -92,6 +92,7 @@ export const bookingRouter = router({
         instructionEnabled: z.boolean().optional().default(false),
         instructionText: z.string().optional().nullable(),
         minLeadDays: z.number().int().min(0).max(30).default(0),
+        contractAction: z.string().max(32).optional().nullable(),
         rules: z.array(
           z.object({
             days: z.array(z.number().int().min(0).max(6)),
@@ -141,6 +142,7 @@ export const bookingRouter = router({
         instructionEnabled: z.boolean().optional(),
         instructionText: z.string().optional().nullable(),
         minLeadDays: z.number().int().min(0).max(30).optional(),
+        contractAction: z.string().max(32).optional().nullable(),
         isActive: z.boolean().optional(),
         rules: z.array(
           z.object({

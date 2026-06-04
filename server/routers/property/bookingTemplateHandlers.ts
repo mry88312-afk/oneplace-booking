@@ -24,6 +24,7 @@ interface TemplateCreateInput {
   instructionEnabled?: boolean;
   instructionText?: string | null;
   minLeadDays?: number;
+  contractAction?: string | null;
   rules?: Array<{
     days: number[];
     calendarId: string;
@@ -75,6 +76,7 @@ export async function handleCreateTemplate(input: TemplateCreateInput & { projec
     instructionEnabled: input.instructionEnabled ?? false,
     instructionText: input.instructionText || null,
     minLeadDays: input.minLeadDays ?? 0,
+    contractAction: input.contractAction || null,
     createdByUserId,
   });
   const templateId = result.insertId;
@@ -135,6 +137,7 @@ interface TemplateUpdateInput {
   instructionEnabled?: boolean;
   instructionText?: string | null;
   minLeadDays?: number;
+  contractAction?: string | null;
   rules?: Array<{
     days: number[];
     calendarId: string;
@@ -176,6 +179,7 @@ export async function handleUpdateTemplate(input: TemplateUpdateInput) {
   if (input.instructionEnabled !== undefined) updateData.instructionEnabled = input.instructionEnabled;
   if (input.instructionText !== undefined) updateData.instructionText = input.instructionText;
   if (input.minLeadDays !== undefined) updateData.minLeadDays = input.minLeadDays;
+  if (input.contractAction !== undefined) updateData.contractAction = input.contractAction;
   if (input.isActive !== undefined) updateData.isActive = input.isActive;
 
   if (Object.keys(updateData).length > 0) {
