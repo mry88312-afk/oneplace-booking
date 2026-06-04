@@ -12,6 +12,82 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPut, ragicDelete } from "./bookingHelpers";
+import { pushLineDirect } from "./bookingConfirmHandler";
+
+// ─── LINE 卡片小工具（取消 / 變更後通知）──────────────────────────────────
+
+function taipeiParts(ms: number) {
+  const t = new Date(ms + 8 * 3600000);
+  const wd = ["日", "一", "二", "三", "四", "五", "六"][t.getUTCDay()];
+  return {
+    dateStr: `${t.getUTCFullYear()}/${String(t.getUTCMonth() + 1).padStart(2, "0")}/${String(t.getUTCDate()).padStart(2, "0")}`,
+    weekday: wd,
+    timeStr: `${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`,
+  };
+}
+
+/** 卡片底部動作按鈕（變更時間 / 取消），需 liffId */
+function buildActionFooter(liffId: string | null, bookingId: number, templateType: string): any | undefined {
+  if (!liffId) return undefined;
+  return {
+    type: "box",
+    layout: "vertical",
+    spacing: "sm",
+    contents: [
+      { type: "button", style: "primary", height: "sm", color: "#4A6741",
+        action: { type: "uri", label: `變更${templateType}時間`, uri: `https://liff.line.me/${liffId}?reschedule=${bookingId}` } },
+      { type: "button", style: "secondary", height: "sm",
+        action: { type: "uri", label: `取消${templateType}`, uri: `https://liff.line.me/${liffId}?cancel=${bookingId}` } },
+    ],
+    paddingAll: "16px",
+  };
+}
+
+/** 通用資訊卡（header 色塊 + 資料列 + 可選 footer/note） */
+function buildSimpleCard(opts: {
+  title: string;
+  headerColor: string;
+  altText: string;
+  rows: { label: string; value: string }[];
+  note?: string;
+  footer?: any;
+}) {
+  const bubble: any = {
+    type: "bubble",
+    size: "mega",
+    header: {
+      type: "box",
+      layout: "vertical",
+      contents: [{ type: "text", text: opts.title, size: "lg", weight: "bold", color: "#FFFFFF", wrap: true }],
+      backgroundColor: opts.headerColor,
+      paddingAll: "20px",
+    },
+    body: {
+      type: "box",
+      layout: "vertical",
+      contents: [
+        ...opts.rows.map((r) => ({
+          type: "box",
+          layout: "horizontal",
+          margin: "md",
+          contents: [
+            { type: "text", text: r.label, size: "sm", color: "#8C8C8C", flex: 2 },
+            { type: "text", text: r.value, size: "sm", color: "#333333", weight: "bold", flex: 4, wrap: true },
+          ],
+        })),
+        ...(opts.note
+          ? [
+              { type: "separator", margin: "xl" },
+              { type: "text", text: opts.note, size: "xs", color: "#AAAAAA", margin: "lg", wrap: true, align: "center" },
+            ]
+          : []),
+      ],
+      paddingAll: "20px",
+    },
+  };
+  if (opts.footer) bubble.footer = opts.footer;
+  return { type: "flex" as const, altText: opts.altText, contents: bubble };
+}
 
 /** 取得預約 + 對應模版（含 uid 比對）。回傳 { record, template }。 */
 async function loadOwnedBooking(bookingId: number, uid: string) {
@@ -81,6 +157,27 @@ export async function handleCancelBookingPublic(input: { bookingId: number; uid:
     .set({ status: "cancelled", cancelReason: "租客自行取消" })
     .where(eq(schema.bookingRecords.id, record.id));
 
+  // 送出「已取消」卡片（fire-and-forget，失敗不影響結果）
+  if (record.tenantUid) {
+    const p = taipeiParts(record.bookingTime);
+    const rows = [
+      { label: "類型", value: template.templateType },
+      { label: "姓名", value: record.tenantName || "" },
+      ...(record.roomNumber ? [{ label: "房間", value: record.roomNumber }] : []),
+      { label: "原時間", value: `${p.dateStr}（${p.weekday}）${p.timeStr}` },
+    ];
+    pushLineDirect(
+      record.tenantUid,
+      buildSimpleCard({
+        title: `已取消${template.templateType}`,
+        headerColor: "#9CA3AF",
+        altText: `已取消${template.templateType}預約`,
+        rows,
+        note: "此預約已取消，如需重新預約請聯繫一方或重新開啟預約連結。",
+      }),
+    ).catch(() => {});
+  }
+
   return { success: true };
 }
 
@@ -136,6 +233,31 @@ export async function handleRescheduleBooking(input: {
       googleCalendarId: input.calendarId,
     })
     .where(eq(schema.bookingRecords.id, record.id));
+
+  // 送出「已更新時間」卡片（保留動作按鈕，可再次變更/取消）
+  if (record.tenantUid) {
+    const s = taipeiParts(new Date(input.startTime).getTime());
+    const e = taipeiParts(new Date(input.endTime).getTime());
+    const rows = [
+      { label: "類型", value: template.templateType },
+      { label: "姓名", value: record.tenantName || "" },
+      ...(record.roomNumber ? [{ label: "房間", value: record.roomNumber }] : []),
+      { label: "新日期", value: `${s.dateStr}（${s.weekday}）` },
+      { label: "新時間", value: `${s.timeStr} - ${e.timeStr}` },
+      { label: "負責人", value: input.assigneeName },
+    ];
+    pushLineDirect(
+      record.tenantUid,
+      buildSimpleCard({
+        title: "✅ 已更新預約時間",
+        headerColor: "#4A6741",
+        altText: `已更新${template.templateType}時間 ${s.dateStr} ${s.timeStr}`,
+        rows,
+        footer: buildActionFooter(template.liffId, record.id, template.templateType),
+        note: template.liffId ? undefined : "如需再次變更或取消，請聯繫我們",
+      }),
+    ).catch(() => {});
+  }
 
   return { success: true, bookingId: record.id };
 }

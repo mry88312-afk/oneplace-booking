@@ -17,7 +17,7 @@ import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap, resolveTemplateBu
  * 當主系統 webhook 失敗（500/503/timeout/network error）時使用，
  * 確保即使主系統 MANUS 掛掉，租客還是能收到預約確認卡片。
  */
-async function pushLineDirect(
+export async function pushLineDirect(
   tenantUid: string,
   flexMessage: any,
 ): Promise<{ success: boolean; error?: string }> {
