@@ -10,7 +10,7 @@ import {
   type PageView,
 } from "@/components/booking";
 import {
-  VerifyView, PhoneView, RegisterView,
+  VerifyView, PhoneView, RegisterView, RemittanceView,
   CalendarViewPage, SlotsView, InstructionView, FormView, SuccessView,
 } from "@/components/booking";
 
@@ -63,6 +63,9 @@ export default function BookingPublic() {
   const [contractRecordId, setContractRecordId] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState<string | null>(null);
   const [bookingResult, setBookingResult] = useState<{ success: boolean; bookingId?: number } | null>(null);
+  // P22b 續約付款設定（匯訂）— 只在 renewal 啟用，verify 後、選時段前插入
+  const [remittanceDone, setRemittanceDone] = useState(false);
+  const [verifiedPhone, setVerifiedPhone] = useState("");
 
   const templateQuery = trpc.booking.getPublicTemplate.useQuery(
     { projectId },
@@ -125,6 +128,15 @@ export default function BookingPublic() {
     }
   };
 
+  // P22b：身份驗證後是否需先做付款設定（匯訂）— 只在 renewal 啟用
+  const needsRemittance = (tmpl: typeof template) => tmpl?.projectId === "renewal";
+  // 付款設定完成後繼續原本流程（指定時段 or 選日期）
+  const continueAfterRemittance = () => {
+    setRemittanceDone(true);
+    if (isPresetMode && presetSlotQuery.data) jumpToPresetForm(presetSlotQuery.data, template);
+    else setView("calendar");
+  };
+
   const verifyRetryRef = useRef(0);
   const verifyMutation = trpc.booking.verifyTenantUid.useMutation({
     onSuccess: (data) => {
@@ -132,8 +144,11 @@ export default function BookingPublic() {
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
+      setVerifiedPhone((data as any).phone || "");
       console.log("[BOOKING] verify success — isPresetMode:", isPresetMode, "presetSlot.data:", !!presetSlotQuery.data, "presetT:", presetT);
-      if (isPresetMode && presetSlotQuery.data) {
+      if (needsRemittance(template) && !remittanceDone) {
+        setView("remittance");
+      } else if (isPresetMode && presetSlotQuery.data) {
         jumpToPresetForm(presetSlotQuery.data, template);
       } else {
         if (isPresetMode) console.log("[BOOKING] presetSlot 尚未回來 → 先進 calendar，等 useEffect 補救");
@@ -170,7 +185,10 @@ export default function BookingPublic() {
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
-      if (isPresetMode && presetSlotQuery.data) {
+      setVerifiedPhone((data as any).phone || phoneInput.trim());
+      if (needsRemittance(template) && !remittanceDone) {
+        setView("remittance");
+      } else if (isPresetMode && presetSlotQuery.data) {
         jumpToPresetForm(presetSlotQuery.data, template);
       } else {
         setView("calendar");
@@ -202,7 +220,10 @@ export default function BookingPublic() {
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber || "");
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
       if (data.isNewRecord) toast.success("已為您建立資料，請繼續預約");
-      if (isPresetMode && presetSlotQuery.data) {
+      setVerifiedPhone(phoneInput.trim());
+      if (needsRemittance(template) && !remittanceDone) {
+        setView("remittance");
+      } else if (isPresetMode && presetSlotQuery.data) {
         jumpToPresetForm(presetSlotQuery.data, template);
       } else {
         setView("calendar");
@@ -485,6 +506,7 @@ export default function BookingPublic() {
   if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
   if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;
   if (view === "register") return <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />;
+  if (view === "remittance") return <RemittanceView template={template} name={tenantName} phone={verifiedPhone || phoneInput} uid={lineUserId || uid} onComplete={continueAfterRemittance} />;
   if (view === "calendar") return <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />;
   if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} />;
   if (view === "instruction" && confirmedSlot) return <InstructionView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} onNext={handleInstructionNext} setView={setView} setConfirmedSlot={setConfirmedSlot} />;

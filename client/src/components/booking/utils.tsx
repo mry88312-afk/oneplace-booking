@@ -156,4 +156,4 @@ export function BookingErrorScreen({ message }: { message?: string }) {
   );
 }
 
-export type PageView = "verify" | "phone" | "register" | "calendar" | "slots" | "instruction" | "form" | "success";
+export type PageView = "verify" | "phone" | "register" | "remittance" | "calendar" | "slots" | "instruction" | "form" | "success";

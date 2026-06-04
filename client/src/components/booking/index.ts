@@ -1,4 +1,5 @@
 export { BookingCalendar } from "./BookingCalendar";
+export { RemittanceView } from "./RemittanceView";
 export {
   VerifyView,
   PhoneView,
