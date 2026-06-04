@@ -11,6 +11,7 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap } from "./bookingHelpers";
+import { getLockedBundle, getLockedFields } from "../../config/lockedTemplates";
 
 /**
  * Fallback：直接打 LINE Messaging API push message
@@ -93,11 +94,18 @@ export async function handleConfirmBooking(
     });
   }
 
-  // 取得模版
-  const [template] = await db
-    .select()
-    .from(schema.bookingTemplates)
-    .where(eq(schema.bookingTemplates.projectId, input.projectId));
+  // 取得模版（P18: 退租/續約 走 hardcode）
+  const lockedBundle = getLockedBundle(input.projectId);
+  let template: typeof schema.bookingTemplates.$inferSelect | undefined;
+  if (lockedBundle) {
+    template = lockedBundle.template;
+  } else {
+    const [row] = await db
+      .select()
+      .from(schema.bookingTemplates)
+      .where(eq(schema.bookingTemplates.projectId, input.projectId));
+    template = row;
+  }
   if (!template)
     throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
   if (!template.isActive)
@@ -123,10 +131,11 @@ export async function handleConfirmBooking(
     };
 
     const fileFieldsToUpload: Array<{ fieldId: string; fileUrl: string }> = [];
-    const allFields = await db
+    const lockedFields = getLockedFields(template.id);
+    const allFields = lockedFields ?? (await db
       .select()
       .from(schema.bookingFormFields)
-      .where(eq(schema.bookingFormFields.templateId, template.id));
+      .where(eq(schema.bookingFormFields.templateId, template.id)));
 
     for (const field of allFields) {
       if (

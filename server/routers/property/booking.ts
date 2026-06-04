@@ -19,59 +19,69 @@ import {
   handleVerifyTenantUid,
   handleVerifyByPhone,
 } from "./bookingVerifyHandlers";
+import { getLockedBundle } from "../../config/lockedTemplates";
 
 export const bookingRouter = router({
   /** 取得預約模版公開資訊（租客端用） */
   getPublicTemplate: publicProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ input }) => {
-      let db: Awaited<ReturnType<typeof getDb>>;
-      try {
-        db = await getDb();
-      } catch (err: any) {
-        console.error("[Booking-Public] DB connection failed:", err?.message);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "SERVICE_UNAVAILABLE",
-        });
-      }
-      if (!db)
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "SERVICE_UNAVAILABLE",
-        });
-
+      // P18: 退租/續約 走 hardcode，不打 DB
+      const lockedBundle = getLockedBundle(input.projectId);
       let template: typeof schema.bookingTemplates.$inferSelect | undefined;
       let fields: (typeof schema.bookingFormFields.$inferSelect)[] = [];
       let rules: (typeof schema.calendarRoutingRules.$inferSelect)[] = [];
-      try {
-        const [row] = await db
-          .select()
-          .from(schema.bookingTemplates)
-          .where(
-            and(
-              eq(schema.bookingTemplates.projectId, input.projectId),
-              eq(schema.bookingTemplates.isActive, true),
-            ),
-          );
-        template = row;
-        if (template) {
-          fields = await db
-            .select()
-            .from(schema.bookingFormFields)
-            .where(eq(schema.bookingFormFields.templateId, template.id))
-            .orderBy(schema.bookingFormFields.sortOrder);
-          rules = await db
-            .select()
-            .from(schema.calendarRoutingRules)
-            .where(eq(schema.calendarRoutingRules.templateId, template.id));
+
+      if (lockedBundle && lockedBundle.template.isActive) {
+        template = lockedBundle.template;
+        fields = lockedBundle.fields;
+        rules = lockedBundle.rules;
+      } else {
+        let db: Awaited<ReturnType<typeof getDb>>;
+        try {
+          db = await getDb();
+        } catch (err: any) {
+          console.error("[Booking-Public] DB connection failed:", err?.message);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "SERVICE_UNAVAILABLE",
+          });
         }
-      } catch (err: any) {
-        console.error("[Booking-Public] DB query failed:", err?.message);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "SERVICE_UNAVAILABLE",
-        });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "SERVICE_UNAVAILABLE",
+          });
+
+        try {
+          const [row] = await db
+            .select()
+            .from(schema.bookingTemplates)
+            .where(
+              and(
+                eq(schema.bookingTemplates.projectId, input.projectId),
+                eq(schema.bookingTemplates.isActive, true),
+              ),
+            );
+          template = row;
+          if (template) {
+            fields = await db
+              .select()
+              .from(schema.bookingFormFields)
+              .where(eq(schema.bookingFormFields.templateId, template.id))
+              .orderBy(schema.bookingFormFields.sortOrder);
+            rules = await db
+              .select()
+              .from(schema.calendarRoutingRules)
+              .where(eq(schema.calendarRoutingRules.templateId, template.id));
+          }
+        } catch (err: any) {
+          console.error("[Booking-Public] DB query failed:", err?.message);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "SERVICE_UNAVAILABLE",
+          });
+        }
       }
       if (!template)
         throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在或已停用" });
@@ -234,8 +244,10 @@ export const bookingRouter = router({
       }),
     )
     .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // P18: 退租/續約 走 hardcode；其他 templateType 才連 DB
+      const lockedBundle = getLockedBundle(input.projectId);
+      const db = lockedBundle ? null : await getDb();
+      if (!lockedBundle && !db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       let year: number, month: number, day: number, hour: number, minute: number;
       if (input.t.length === 12) {
         year = parseInt(input.t.slice(0, 4));
@@ -267,15 +279,32 @@ export const bookingRouter = router({
       const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
       const startTimeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 
-      const [template] = await db
-        .select()
-        .from(schema.bookingTemplates)
-        .where(
-          and(
-            eq(schema.bookingTemplates.projectId, input.projectId),
-            eq(schema.bookingTemplates.isActive, true),
-          ),
+      let template: typeof schema.bookingTemplates.$inferSelect | undefined;
+      let rules: (typeof schema.calendarRoutingRules.$inferSelect)[] = [];
+      if (lockedBundle && lockedBundle.template.isActive) {
+        template = lockedBundle.template;
+        rules = [...lockedBundle.rules].sort(
+          (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
         );
+      } else if (db) {
+        const [row] = await db
+          .select()
+          .from(schema.bookingTemplates)
+          .where(
+            and(
+              eq(schema.bookingTemplates.projectId, input.projectId),
+              eq(schema.bookingTemplates.isActive, true),
+            ),
+          );
+        template = row;
+        if (template) {
+          rules = await db
+            .select()
+            .from(schema.calendarRoutingRules)
+            .where(eq(schema.calendarRoutingRules.templateId, template.id))
+            .orderBy(schema.calendarRoutingRules.sortOrder);
+        }
+      }
       if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
 
       const slotDuration = template.slotDurationMinutes || 60;
@@ -287,11 +316,6 @@ export const bookingRouter = router({
 
       const { getTaipeiDayOfWeek } = await import("./bookingHelpers");
       const dayOfWeek = getTaipeiDayOfWeek(date);
-      const rules = await db
-        .select()
-        .from(schema.calendarRoutingRules)
-        .where(eq(schema.calendarRoutingRules.templateId, template.id))
-        .orderBy(schema.calendarRoutingRules.sortOrder);
 
       const matchingRule =
         rules.find((r) => {

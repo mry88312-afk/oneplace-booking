@@ -13,35 +13,39 @@ import {
   lookupLatestContractRecordId,
   RAGIC_API_KEY_VALUE,
 } from "./bookingHelpers";
+import { getLockedTemplate } from "../../config/lockedTemplates";
 
 export async function handleVerifyTenantUid(input: {
   projectId: string;
   uid: string;
 }) {
-  let db: Awaited<ReturnType<typeof getDb>>;
-  try {
-    db = await getDb();
-  } catch (err: any) {
-    console.error("[Booking-Verify] DB connection failed:", err?.message);
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
-  }
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
-
-  let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-  try {
-    const [row] = await db
-      .select()
-      .from(schema.bookingTemplates)
-      .where(
-        and(
-          eq(schema.bookingTemplates.projectId, input.projectId),
-          eq(schema.bookingTemplates.isActive, true)
-        )
-      );
-    template = row;
-  } catch (err: any) {
-    console.error("[Booking-Verify] DB query failed:", err?.message);
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+  // P18: 退租/續約 走 hardcode；其他才連 DB
+  let template: typeof schema.bookingTemplates.$inferSelect | undefined =
+    getLockedTemplate(input.projectId) ?? undefined;
+  if (!template) {
+    let db: Awaited<ReturnType<typeof getDb>>;
+    try {
+      db = await getDb();
+    } catch (err: any) {
+      console.error("[Booking-Verify] DB connection failed:", err?.message);
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+    }
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+    try {
+      const [row] = await db
+        .select()
+        .from(schema.bookingTemplates)
+        .where(
+          and(
+            eq(schema.bookingTemplates.projectId, input.projectId),
+            eq(schema.bookingTemplates.isActive, true)
+          )
+        );
+      template = row;
+    } catch (err: any) {
+      console.error("[Booking-Verify] DB query failed:", err?.message);
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+    }
   }
   if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
 
@@ -126,30 +130,33 @@ export async function handleVerifyByPhone(input: {
   phone: string;
   uid?: string;
 }) {
-  let db: Awaited<ReturnType<typeof getDb>>;
-  try {
-    db = await getDb();
-  } catch (err: any) {
-    console.error("[Booking-Phone] DB connection failed:", err?.message);
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
-  }
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
-
-  let template: typeof schema.bookingTemplates.$inferSelect | undefined;
-  try {
-    const [row] = await db
-      .select()
-      .from(schema.bookingTemplates)
-      .where(
-        and(
-          eq(schema.bookingTemplates.projectId, input.projectId),
-          eq(schema.bookingTemplates.isActive, true)
-        )
-      );
-    template = row;
-  } catch (err: any) {
-    console.error("[Booking-Phone] DB query failed:", err?.message);
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+  // P18: 退租/續約 走 hardcode；其他才連 DB
+  let template: typeof schema.bookingTemplates.$inferSelect | undefined =
+    getLockedTemplate(input.projectId) ?? undefined;
+  if (!template) {
+    let db: Awaited<ReturnType<typeof getDb>>;
+    try {
+      db = await getDb();
+    } catch (err: any) {
+      console.error("[Booking-Phone] DB connection failed:", err?.message);
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+    }
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+    try {
+      const [row] = await db
+        .select()
+        .from(schema.bookingTemplates)
+        .where(
+          and(
+            eq(schema.bookingTemplates.projectId, input.projectId),
+            eq(schema.bookingTemplates.isActive, true)
+          )
+        );
+      template = row;
+    } catch (err: any) {
+      console.error("[Booking-Phone] DB query failed:", err?.message);
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SERVICE_UNAVAILABLE" });
+    }
   }
   if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
 
