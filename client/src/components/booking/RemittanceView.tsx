@@ -11,7 +11,7 @@
  *   POST /api/verify-otp { phone, otp }                 → { success, message, virtualAccount, verifyToken }
  *   POST /api/submit     { uid, name, phone, idNumber, email, job, virtualAccount, verifyToken, lineProfile } → { success }
  */
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,13 +60,39 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
   const [email, setEmail] = useState("");
   const [job, setJob] = useState("");
 
-  const [otp, setOtp] = useState("");
   const [isForeign, setIsForeign] = useState(false);
+  const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(""));
+  const [manualCode, setManualCode] = useState("");      // 客服/外國：可輸入較長的萬能碼
+  const [manualMode, setManualMode] = useState(false);
+  const otpRefs = useRef<Array<HTMLInputElement | null>>([]);
   const [virtualAccount, setVirtualAccount] = useState("");
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const useManual = isForeign || manualMode;
+  const otpValue = (useManual ? manualCode : otpDigits.join("")).trim();
+  const clearOtp = () => { setOtpDigits(Array(6).fill("")); setManualCode(""); };
+
+  const handleDigitChange = (i: number, raw: string) => {
+    const d = raw.replace(/\D/g, "");
+    if (d.length > 1) {
+      // 貼上 / iOS 簡訊自動填入：把多碼分散到各格
+      setOtpDigits((prev) => {
+        const next = [...prev];
+        for (let k = 0; k < d.length && i + k < 6; k++) next[i + k] = d[k];
+        return next;
+      });
+      otpRefs.current[Math.min(i + d.length, 5)]?.focus();
+      return;
+    }
+    setOtpDigits((prev) => { const next = [...prev]; next[i] = d; return next; });
+    if (d && i < 5) otpRefs.current[i + 1]?.focus();
+  };
+  const handleDigitKey = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !otpDigits[i] && i > 0) otpRefs.current[i - 1]?.focus();
+  };
 
   const startCountdown = () => {
     setCountdown(60);
@@ -120,7 +146,7 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
       const r = await postJson("/send-otp", {
         phone: normalizedPhone, name: nameInput.trim(), email: email.trim(), job: job.trim(),
       });
-      if (r.success) { toast.success("驗證碼已重新發送"); setOtp(""); startCountdown(); }
+      if (r.success) { toast.success("驗證碼已重新發送"); clearOtp(); startCountdown(); }
       else toast.error(r.message || "發送失敗");
     } catch (err: any) {
       toast.error(err?.message || "網路錯誤");
@@ -130,13 +156,13 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
   };
 
   const handleVerify = async () => {
-    if (otp.trim().length < 4) return toast.error("請輸入完整驗證碼");
+    if (otpValue.length < 4) return toast.error("請輸入完整驗證碼");
     setVerifying(true);
     try {
-      const r = await postJson("/verify-otp", { phone: normalizedPhone, otp: otp.trim() });
+      const r = await postJson("/verify-otp", { phone: normalizedPhone, otp: otpValue });
       if (!r.success || !r.virtualAccount) {
         toast.error(r.message || "驗證失敗");
-        setOtp("");
+        clearOtp();
         return;
       }
       const va = r.virtualAccount as string;
@@ -183,8 +209,8 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
             <div className="w-14 h-14 bg-[#6B8E6B] rounded-full flex items-center justify-center mx-auto mb-4">
               <Wallet className="h-7 w-7 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-1">付款設定</h1>
-            <p className="text-sm text-gray-500">更新個人資料並取得中信專屬固定式匯款帳號</p>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">更新個人資料</h1>
+            <p className="text-sm text-gray-500">完成付款設定，取得中信專屬固定式匯款帳號</p>
           </div>
           <div className="space-y-4">
             <div>
@@ -235,17 +261,42 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
               <p className="text-sm text-gray-500">驗證碼已發送至 {normalizedPhone}</p>
             )}
           </div>
-          <div className="space-y-4">
-            <input
-              inputMode="numeric"
-              value={otp}
-              onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="請輸入驗證碼"
-              className="h-14 text-2xl text-center tracking-[0.5em] w-full rounded-md border border-input bg-background px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6B8E6B]"
-              autoFocus
-            />
+          <div className="space-y-5">
+            {useManual ? (
+              <input
+                inputMode="text"
+                value={manualCode}
+                onChange={(e) => setManualCode(e.target.value.slice(0, 20))}
+                placeholder="輸入客服提供的驗證碼"
+                className="h-14 text-xl text-center w-full rounded-xl border-2 border-gray-200 bg-white px-3 focus:outline-none focus:border-[#6B8E6B] focus:ring-2 focus:ring-[#6B8E6B]/20"
+                autoFocus
+              />
+            ) : (
+              <div
+                className="flex justify-center gap-2"
+                onPaste={(e) => {
+                  const t = e.clipboardData.getData("text");
+                  if (/\d/.test(t)) { e.preventDefault(); handleDigitChange(0, t); }
+                }}
+              >
+                {otpDigits.map((dgt, i) => (
+                  <input
+                    key={i}
+                    ref={(el) => { otpRefs.current[i] = el; }}
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={dgt}
+                    onChange={(e) => handleDigitChange(i, e.target.value)}
+                    onKeyDown={(e) => handleDigitKey(i, e)}
+                    autoComplete={i === 0 ? "one-time-code" : "off"}
+                    autoFocus={i === 0}
+                    className="w-11 h-14 text-2xl font-bold text-center rounded-xl border-2 border-gray-200 bg-white text-gray-900 focus:outline-none focus:border-[#6B8E6B] focus:ring-2 focus:ring-[#6B8E6B]/20 transition-colors"
+                  />
+                ))}
+              </div>
+            )}
             <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
-              onClick={handleVerify} disabled={busy || otp.length < 4}>
+              onClick={handleVerify} disabled={busy || otpValue.length < 4}>
               {busy ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />驗證中...</>) : "驗證並取得帳號"}
             </Button>
             <div className="flex items-center justify-center gap-3 text-sm">
@@ -261,6 +312,14 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
                 </>
               )}
             </div>
+            {!isForeign && (
+              <p className="text-center text-xs">
+                <button type="button" className="text-gray-400 hover:text-[#6B8E6B]"
+                  onClick={() => { setManualMode((m) => !m); clearOtp(); }}>
+                  {manualMode ? "改用簡訊 6 位數驗證碼" : "收不到簡訊？改輸入客服提供的驗證碼"}
+                </button>
+              </p>
+            )}
           </div>
         </div>
       </BookingContainer>
