@@ -47,8 +47,8 @@ interface RemittanceViewProps {
   phone: string;
   /** LINE userId（推虛擬帳號卡片用） */
   uid: string | null;
-  /** 完成後續約流程繼續（回到 calendar / preset form） */
-  onComplete: () => void;
+  /** 完成後續約流程繼續（回到 calendar / preset form），帶回虛擬帳號供確認卡顯示 */
+  onComplete: (virtualAccount?: string) => void;
 }
 
 export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewProps) {
@@ -351,7 +351,7 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
           </Button>
         </div>
         <Button className="w-full h-12 mt-8 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
-          onClick={onComplete}>
+          onClick={() => onComplete(virtualAccount)}>
           繼續預約時段
         </Button>
         <p className="mt-3 flex items-center justify-center gap-1 text-xs text-gray-400">

@@ -393,6 +393,10 @@ export function FormView({
               {field.fieldType !== "description" && (
                 <Label className="text-sm font-medium text-gray-700">{field.label}{field.isRequired && <span className="text-red-500 ml-1">*</span>}</Label>
               )}
+              {/* 小標：非說明欄位若有 descriptionText，顯示為灰色提示 */}
+              {field.fieldType !== "description" && field.descriptionText && (
+                <p className="text-xs text-gray-400 mt-0.5 whitespace-pre-wrap">{field.descriptionText}</p>
+              )}
               {field.fieldType === "description" && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg"><p className="text-sm text-amber-800 whitespace-pre-wrap">{linkifyText(field.descriptionText || field.label)}</p></div>
               )}

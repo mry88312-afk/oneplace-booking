@@ -48,6 +48,61 @@ async function pushLineDirect(
   }
 }
 
+/**
+ * P26：續約「節點流程說明」卡（第二張）。預設樣式，後續可調整文案/節點。
+ * 已完成的節點打勾，後續節點以待辦呈現。
+ */
+function buildRenewalNodeCard(_templateType: string) {
+  const steps: { icon: string; text: string; done: boolean }[] = [
+    { icon: "✅", text: "更新資料・取得虛擬帳號", done: true },
+    { icon: "✅", text: "預約續約專員時段", done: true },
+    { icon: "③", text: "專員準備續約特約與線上簽約連結", done: false },
+    { icon: "④", text: "約定時段：線上簽署 + 點交", done: false },
+    { icon: "⑤", text: "完成續約 🎉", done: false },
+  ];
+  return {
+    type: "flex" as const,
+    altText: "續約流程說明",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: "📋 續約流程", weight: "bold", color: "#FFFFFF", size: "lg" },
+          { type: "text", text: "目前進度與接下來的步驟", color: "#E8EFE6", size: "xs", margin: "sm" },
+        ],
+        backgroundColor: "#4A6741",
+        paddingAll: "20px",
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: steps.map((s) => ({
+          type: "box" as const,
+          layout: "horizontal" as const,
+          spacing: "md",
+          contents: [
+            { type: "text" as const, text: s.icon, size: "sm" as const, color: s.done ? "#4A6741" : "#B0B0B0", flex: 0 },
+            { type: "text" as const, text: s.text, size: "sm" as const, wrap: true, color: s.done ? "#333333" : "#888888", weight: (s.done ? "bold" : "regular") as const },
+          ],
+        })),
+        paddingAll: "20px",
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: "後續專員會主動與您聯繫，請留意 LINE 通知 🔔", size: "xs", color: "#AAAAAA", wrap: true, align: "center" },
+        ],
+        paddingAll: "16px",
+      },
+    },
+  };
+}
+
 export async function handleConfirmBooking(
   input: {
     projectId: string;
@@ -63,6 +118,7 @@ export async function handleConfirmBooking(
     address?: string;
     formAnswers?: Record<string, any>;
     contractRecordId?: number;
+    virtualAccount?: string;
   },
   ctx: any,
 ) {
@@ -269,6 +325,11 @@ export async function handleConfirmBooking(
       ];
       if (input.roomNumber) infoRows.push({ label: "房間", value: input.roomNumber });
       if (input.address) infoRows.push({ label: "地址", value: input.address });
+      // P26：續約卡片附上虛擬帳號，讓租客知道匯款帳號
+      if (input.virtualAccount) {
+        infoRows.push({ label: "銀行", value: "822 中國信託" });
+        infoRows.push({ label: "虛擬帳號", value: input.virtualAccount });
+      }
 
       const flexMessage = {
         type: "flex" as const,
@@ -387,6 +448,17 @@ export async function handleConfirmBooking(
         },
       };
 
+      const isRenewal = template.templateType === "續約" || template.projectId === "renewal";
+      if (isRenewal) {
+        // 續約：確認卡 + 節點說明卡，依序直推（確保先確認卡、後節點卡）
+        const nodeCard = buildRenewalNodeCard(template.templateType);
+        pushLineDirect(input.uid, flexMessage)
+          .then((r) => { if (!r.success) console.error("[Booking] 續約確認卡直推失敗:", r.error); return pushLineDirect(input.uid, nodeCard); })
+          .then((r2: any) => { if (r2 && !r2.success) console.warn("[Booking] 續約節點卡發送失敗:", r2.error); })
+          .catch((e: any) => console.error("[Booking] 續約雙卡推送例外:", e?.message));
+      }
+
+      if (!isRenewal) {
       const webhookUrl = process.env.MAIN_SYSTEM_WEBHOOK_URL;
       const webhookSecret = process.env.BOOKING_WEBHOOK_SECRET;
 
@@ -445,6 +517,7 @@ export async function handleConfirmBooking(
             console.error("[Booking] notify-line webhook failed:", err?.message);
             await fallbackToDirect(`webhook exception: ${err?.message}`);
           });
+      }
       }
     }
   } catch (err: any) {

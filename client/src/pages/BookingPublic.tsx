@@ -79,6 +79,7 @@ export default function BookingPublic() {
   // P22b 續約付款設定（匯訂）— 只在 renewal 啟用，verify 後、選時段前插入
   const [remittanceDone, setRemittanceDone] = useState(false);
   const [verifiedPhone, setVerifiedPhone] = useState("");
+  const [remittanceVA, setRemittanceVA] = useState(""); // 付款設定取得的虛擬帳號，帶到確認卡
   // P23 卡片動作
   const [actionCancelled, setActionCancelled] = useState(false);
   const [actionTenantName, setActionTenantName] = useState("");
@@ -151,8 +152,9 @@ export default function BookingPublic() {
   // P22b：身份驗證後是否需先做付款設定（匯訂）— 只在 renewal 啟用
   const needsRemittance = (tmpl: typeof template) => tmpl?.projectId === "renewal";
   // 付款設定完成後繼續原本流程（指定時段 or 選日期）
-  const continueAfterRemittance = () => {
+  const continueAfterRemittance = (va?: string) => {
     setRemittanceDone(true);
+    if (va) setRemittanceVA(va);
     if (isPresetMode && presetSlotQuery.data) jumpToPresetForm(presetSlotQuery.data, template);
     else setView("calendar");
   };
@@ -474,6 +476,7 @@ export default function BookingPublic() {
       phone: phoneInput.trim() || undefined, address: address || undefined,
       formAnswers: Object.keys(formAnswers).length > 0 ? formAnswers : undefined,
       contractRecordId: contractRecordId ?? undefined,
+      virtualAccount: remittanceVA || undefined,
     });
   };
 
