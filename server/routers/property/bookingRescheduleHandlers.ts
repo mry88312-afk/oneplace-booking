@@ -144,16 +144,21 @@ export async function handleCancelBookingPublic(input: { bookingId: number; uid:
     const numericId = Number(record.ragicRecordId);
     if (!isNaN(numericId) && numericId > 0) {
       const buttonId = process.env.RAGIC_CANCEL_BUTTON_ID || "42"; // go-back/1 取消動作按鈕 bId
-      try {
-        if (buttonId) {
+      // ① 先觸發動作按鈕 → 發 webhook 刪 Google 日曆（best-effort，失敗不擋後續刪除）
+      if (buttonId) {
+        try {
           await ragicExecuteButton(template.ragicTaskPath, numericId, buttonId);
-          console.log(`[Reschedule] 已觸發取消動作按鈕 ${template.ragicTaskPath}/${numericId} bId=${buttonId}`);
-        } else {
-          console.warn("[Reschedule] RAGIC_CANCEL_BUTTON_ID 未設定，改用直接刪除（不連動 Google 日曆）");
-          await ragicDelete(template.ragicTaskPath, numericId);
+          console.log(`[Reschedule] 已觸發取消動作按鈕（刪 Google 日曆）${template.ragicTaskPath}/${numericId} bId=${buttonId}`);
+        } catch (err: any) {
+          console.error("[Reschedule] 動作按鈕觸發失敗（仍繼續刪 Ragic）:", err.message);
         }
+      }
+      // ② 刪除 Ragic 任務記錄（關鍵動作，失敗才算取消失敗）
+      try {
+        await ragicDelete(template.ragicTaskPath, numericId);
+        console.log(`[Reschedule] 已刪除 Ragic 任務 ${template.ragicTaskPath}/${numericId}`);
       } catch (err: any) {
-        console.error("[Reschedule] 取消刪除失敗:", err.message);
+        console.error("[Reschedule] Ragic 刪除失敗:", err.message);
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "取消失敗，請稍後再試或聯繫客服" });
       }
     }
