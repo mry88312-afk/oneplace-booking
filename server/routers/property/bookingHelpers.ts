@@ -193,19 +193,29 @@ export async function ragicExecuteButton(ragicPath: string, ragicId: number, but
   return parsed;
 }
 
-/** 從 Ragic 房客記錄中提取房源資訊（for-system-use/2 表） */
+/** 從 Ragic 房客記錄中提取房源資訊（for-system-use/2 表）。
+ *  以欄位編號（field id）優先讀取，中文欄名做後備，避免顯示名變動造成讀取失敗。 */
 export function extractTenantInfo(record: any) {
-  const tenantName = record["房客姓名1"] || record["姓名"] || record["租客姓名"] || record["Name"] || "";
-  const phone = record["連絡電話1"] || "";
-  const email = record["1007542"] || record["Email"] || record["電子郵件"] || record["電子信箱"] || record["E-mail"] || "";
+  const g = (id: string, ...names: string[]): string => {
+    const v = record[id];
+    if (v !== undefined && v !== null && v !== "") return v;
+    for (const n of names) {
+      const nv = record[n];
+      if (nv !== undefined && nv !== null && nv !== "") return nv;
+    }
+    return "";
+  };
+  const tenantName = g("1007373", "房客姓名1", "姓名", "租客姓名", "Name");
+  const phone = g("1007372", "連絡電話1");
+  const email = g("1007542", "email", "Email", "電子郵件");
   const ragicId = record["_ragicId"];
 
-  let roomNumber = record["目前入住房間"] || "";
-  let propertyName = record["案場簡稱"] || "";
-  let address = record["現居地址"] || "";
-  let contractStatus = record["最新契約狀態"] || "";
-  let contractId = record["最新合約編號"] || "";
-  let propertyId = record["案場編號"] || "";
+  const roomNumber = g("1008436", "目前入住房間");
+  const propertyName = g("1010551", "案場簡稱") || g("1015395", "案場簡稱(群組名稱)");
+  const address = g("1008440", "現居地址");
+  const contractStatus = g("1007796", "最新契約狀態");
+  const contractId = g("1019285", "最新合約編號");
+  const propertyId = g("1010546", "案場編號");
 
   return { tenantName, phone, email, roomNumber, propertyName, address, contractStatus, contractId, propertyId, ragicId };
 }
