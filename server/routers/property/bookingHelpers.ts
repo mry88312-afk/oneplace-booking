@@ -230,21 +230,25 @@ export async function lookupContractInfo(phone: string, tenantName: string): Pro
   const normalizedPhone = phone ? phone.replace(/[\s\-()]/g, "") : "";
   if (!normalizedPhone && !tenantName) return null;
 
+  // service-department/4 合約表欄位 ID：租客手機1=1007361 / 姓名1=1007544 / 契約狀態=1007778
+  //   房間編號(可多選)=1007552 / 案場簡稱(群組名稱)=1015395 / 合約編號=1007360
   const [phoneResults, nameResults] = await Promise.all([
     normalizedPhone ? ragicGet("service-department/4", {
-      where: `租客手機1,eq,${normalizedPhone}`,
+      where: `1007361,eq,${normalizedPhone}`,
       limit: "10",
+      naming: "EID",
     }) : Promise.resolve({}),
     tenantName ? ragicGet("service-department/4", {
-      where: `姓名1,eq,${tenantName}`,
+      where: `1007544,eq,${tenantName}`,
       limit: "10",
+      naming: "EID",
     }) : Promise.resolve({}),
   ]);
 
   const seen = new Set<string>();
   const allRecords = [...Object.values(phoneResults), ...Object.values(nameResults)]
     .filter((r: any) => {
-      const id = String(r._ragicId || r["_ragicId"] || JSON.stringify(r));
+      const id = String(r["_ragicId"] || JSON.stringify(r));
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
@@ -252,19 +256,19 @@ export async function lookupContractInfo(phone: string, tenantName: string): Pro
 
   if (allRecords.length === 0) return null;
 
-  const activeContracts = allRecords.filter((r: any) => r["契約狀態"] === "存在");
+  const activeContracts = allRecords.filter((r: any) => r["1007778"] === "存在");
   if (activeContracts.length === 0) return null;
   const target = activeContracts[0];
 
-  const rooms = target["房間編號(可多選)"];
+  const rooms = target["1007552"];
   const roomNumber = Array.isArray(rooms) ? rooms.join(", ") : (rooms || "");
 
   if (roomNumber) {
     return {
       roomNumber,
-      propertyName: target["案場簡稱(群組名稱)"] || "",
-      contractId: target["合約編號"] || "",
-      contractStatus: target["契約狀態"] || "",
+      propertyName: target["1015395"] || "",
+      contractId: target["1007360"] || "",
+      contractStatus: target["1007778"] || "",
     };
   }
 
@@ -282,6 +286,7 @@ export async function lookupLatestContractRecordId(contractNumber: string): Prom
     const data = await ragicGet("go-back/22", {
       where: `1007360,eq,${contractNumber}`,
       limit: "1",
+      naming: "EID",
     });
     const records = Object.values(data) as any[];
     if (records.length === 0) {
