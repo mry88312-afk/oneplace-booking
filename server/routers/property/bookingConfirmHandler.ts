@@ -104,12 +104,19 @@ function buildRenewalNodeCard(_templateType: string) {
 }
 
 /**
- * P35：入住非一人時加發的「JGB 簽約提醒」卡（預設文案，可再調整/補連結）。
+ * P36：入住非一人時加發的「雙人入住 JGB 填寫說明」卡。
+ * 內容依雙人入住規範：身分資料 / 電話Email / 緊急聯絡人。
  */
 function buildJgbCard(occupancy: string) {
+  const sectionTitle = (text: string) => ({
+    type: "text" as const, text, weight: "bold" as const, color: "#4A6741", size: "sm" as const, margin: "lg" as const,
+  });
+  const body = (text: string) => ({
+    type: "text" as const, text, size: "sm" as const, color: "#555555", wrap: true, margin: "sm" as const,
+  });
   return {
     type: "flex" as const,
-    altText: "JGB 簽約提醒（多人入住）",
+    altText: "雙人入住 JGB 填寫說明",
     contents: {
       type: "bubble",
       size: "mega",
@@ -117,7 +124,7 @@ function buildJgbCard(occupancy: string) {
         type: "box",
         layout: "vertical",
         contents: [
-          { type: "text", text: "📝 JGB 簽約提醒", weight: "bold", color: "#FFFFFF", size: "lg" },
+          { type: "text", text: "📝 雙人入住 JGB 填寫說明", weight: "bold", color: "#FFFFFF", size: "md", wrap: true },
           { type: "text", text: `入住人數：${occupancy}`, color: "#FDE8C8", size: "xs", margin: "sm" },
         ],
         backgroundColor: "#B6843E",
@@ -126,11 +133,17 @@ function buildJgbCard(occupancy: string) {
       body: {
         type: "box",
         layout: "vertical",
-        spacing: "md",
         contents: [
-          { type: "text", text: "因為入住不只一人，除了主約人外，其他入住者也需要在 JGB 完成簽署：", size: "sm", color: "#333333", wrap: true },
-          { type: "text", text: "1️⃣ 主約人先完成 JGB 簽約\n2️⃣ 將其他入住者的姓名與聯絡方式提供給專員\n3️⃣ 其他入住者依專員提供的 JGB 連結各自完成簽署\n4️⃣ 全部簽署完成後才算續約完成", size: "sm", color: "#555555", wrap: true },
-          { type: "text", text: "如有疑問請聯繫專員協助 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "md" },
+          sectionTitle("① 身分資料"),
+          body("• 名稱：填「第一人」姓名，前面加一個「/」（例：/王小明）\n• 姓氏：填「第二人」姓名（例：陳小華）\n• 證件號碼：兩人身分證字號中間用「/」隔開\n　例：A123456789／B987654321"),
+          { type: "separator", margin: "xl" },
+          sectionTitle("② 電話 / Email"),
+          body("• 兩組電話請「直接連續」輸入，中間不要加斜線或任何符號\n　例：09123456780987654321\n• 加了符號系統會無法送出\n• Email 填一組即可"),
+          { type: "separator", margin: "xl" },
+          sectionTitle("③ 緊急聯絡人"),
+          body("• 建議填「有血緣的親屬」(父母、兄弟姊妹) 或「夫妻」\n• 除非特殊狀況，請勿填「朋友」"),
+          { type: "separator", margin: "xl" },
+          { type: "text", text: "依上述格式填寫 JGB，有疑問請聯繫專員協助 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "lg" },
         ],
         paddingAll: "20px",
       },
