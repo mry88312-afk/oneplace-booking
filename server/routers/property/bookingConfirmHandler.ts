@@ -61,7 +61,7 @@ function buildRenewalNodeCard(_templateType: string) {
     {
       icon: "④", title: "在 JGB 線上完成簽署",
       subs: ["點開要簽署的合約", "填寫簽約資料", "前往簽名欄，簽名 3 次", "送出給一方"],
-      note: "請於約定時段前完成",
+      note: "可在簽約時段前先完成，加速當天簽約流程",
     },
     { icon: "⑤", title: "約定時段：我們簽回・租金確認及線上點交確認" },
     { icon: "⑥", title: "完成續約 🎉" },
