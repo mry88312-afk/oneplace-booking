@@ -53,13 +53,34 @@ export async function pushLineDirect(
  * 已完成的節點打勾，後續節點以待辦呈現。
  */
 function buildRenewalNodeCard(_templateType: string) {
-  const steps: { icon: string; text: string; done: boolean }[] = [
-    { icon: "✅", text: "更新資料・取得虛擬帳號", done: true },
-    { icon: "✅", text: "預約續約專員時段", done: true },
-    { icon: "③", text: "專員準備續約特約與線上簽約連結", done: false },
-    { icon: "④", text: "約定時段：線上簽署 + 點交", done: false },
-    { icon: "⑤", text: "完成續約 🎉", done: false },
+  type Step = { icon: string; title: string; done?: boolean; desc?: string; subs?: string[]; note?: string };
+  const steps: Step[] = [
+    { icon: "✅", title: "更新個人資料・取得虛擬帳號", done: true },
+    { icon: "✅", title: "預約續約專員時段", done: true },
+    { icon: "③", title: "專員準備續約特約與 JGB 簽約連結", desc: "準備完成後會把連結傳給您" },
+    {
+      icon: "④", title: "在 JGB 線上完成簽署",
+      subs: ["點開要簽署的合約", "填寫簽約資料", "前往簽名欄，簽名 3 次", "送出給一方"],
+      note: "請於約定時段前完成",
+    },
+    { icon: "⑤", title: "約定時段：我們簽回・線上點交確認" },
+    { icon: "⑥", title: "完成續約 🎉" },
   ];
+  const stepBox = (s: Step) => ({
+    type: "box" as const, layout: "horizontal" as const, spacing: "md" as const, margin: "lg" as const,
+    contents: [
+      { type: "text" as const, text: s.icon, size: "md" as const, flex: 0, weight: "bold" as const, color: s.done ? "#4A6741" : "#B6843E" },
+      {
+        type: "box" as const, layout: "vertical" as const, flex: 1,
+        contents: [
+          { type: "text" as const, text: s.title, size: "sm" as const, weight: "bold" as const, wrap: true, color: s.done ? "#A2ABA2" : "#333333", decoration: (s.done ? "line-through" : "none") as const },
+          ...(s.desc ? [{ type: "text" as const, text: s.desc, size: "xs" as const, color: "#999999", wrap: true, margin: "xs" as const }] : []),
+          ...(s.subs ? s.subs.map((t, i) => ({ type: "text" as const, text: `${i + 1}. ${t}`, size: "xs" as const, color: "#666666", wrap: true, margin: (i === 0 ? "sm" : "xs") as const })) : []),
+          ...(s.note ? [{ type: "text" as const, text: `⏰ ${s.note}`, size: "xs" as const, color: "#C2553D", wrap: true, margin: "sm" as const }] : []),
+        ],
+      },
+    ],
+  });
   return {
     type: "flex" as const,
     altText: "續約流程說明",
@@ -79,23 +100,14 @@ function buildRenewalNodeCard(_templateType: string) {
       body: {
         type: "box",
         layout: "vertical",
-        spacing: "md",
-        contents: steps.map((s) => ({
-          type: "box" as const,
-          layout: "horizontal" as const,
-          spacing: "md",
-          contents: [
-            { type: "text" as const, text: s.icon, size: "sm" as const, color: s.done ? "#4A6741" : "#B0B0B0", flex: 0 },
-            { type: "text" as const, text: s.text, size: "sm" as const, wrap: true, color: s.done ? "#333333" : "#888888", weight: (s.done ? "bold" : "regular") as const },
-          ],
-        })),
         paddingAll: "20px",
+        contents: steps.map(stepBox),
       },
       footer: {
         type: "box",
         layout: "vertical",
         contents: [
-          { type: "text", text: "後續專員會主動與您聯繫，請留意 LINE 通知 🔔", size: "xs", color: "#AAAAAA", wrap: true, align: "center" },
+          { type: "text", text: "專員會主動與您聯繫，請留意 LINE 通知 🔔", size: "xs", color: "#AAAAAA", wrap: true, align: "center" },
         ],
         paddingAll: "16px",
       },
