@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React, { useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -353,6 +353,21 @@ export function FormView({
 }: FormViewProps) {
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  // 數字加減欄位（label 含「人數」的 text 欄位）→ 用 stepper 呈現，預設 1
+  const isCounterField = (f: any) =>
+    f.fieldType === "text" && typeof f.label === "string" && f.label.includes("人數");
+  useEffect(() => {
+    const counters = (template.fields || []).filter(isCounterField);
+    if (counters.length === 0) return;
+    setFormAnswers((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const f of counters) if (!next[f.label]) { next[f.label] = "1"; changed = true; }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <BookingContainer>
       <div className="px-6 py-5 border-b border-gray-100">
@@ -475,9 +490,20 @@ export function FormView({
                   </div>
                 );
               })()}
-              {field.fieldType === "text" && (
+              {field.fieldType === "text" && (isCounterField(field) ? (
+                <div className="mt-1.5 inline-flex items-center rounded-lg border border-input overflow-hidden select-none">
+                  <button type="button" aria-label="減少"
+                    className="h-11 w-12 text-2xl text-gray-600 hover:bg-gray-100 active:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={(parseInt(formAnswers[field.label] || "1", 10) || 1) <= 1}
+                    onClick={() => { const v = Math.max(1, (parseInt(formAnswers[field.label] || "1", 10) || 1) - 1); setFormAnswers({ ...formAnswers, [field.label]: String(v) }); }}>−</button>
+                  <div className="h-11 w-16 flex items-center justify-center text-lg font-semibold border-x border-input">{formAnswers[field.label] || "1"}</div>
+                  <button type="button" aria-label="增加"
+                    className="h-11 w-12 text-2xl text-gray-600 hover:bg-gray-100 active:bg-gray-200"
+                    onClick={() => { const v = (parseInt(formAnswers[field.label] || "1", 10) || 1) + 1; setFormAnswers({ ...formAnswers, [field.label]: String(v) }); }}>+</button>
+                </div>
+              ) : (
                 <Input value={formAnswers[field.label] || ""} onChange={(e) => setFormAnswers({ ...formAnswers, [field.label]: e.target.value })} className="mt-1.5 h-11" />
-              )}
+              ))}
               {field.fieldType === "select" && (
                 <Select value={formAnswers[field.label] || ""} onValueChange={(v) => setFormAnswers({ ...formAnswers, [field.label]: v })}>
                   <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder="請選擇" /></SelectTrigger>

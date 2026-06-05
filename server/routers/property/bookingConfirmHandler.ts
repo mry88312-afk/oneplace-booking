@@ -515,9 +515,10 @@ export async function handleConfirmBooking(
 
       if (isRenewal) {
         // 續約：依序直推 確認卡 → 節點說明卡 →（入住非一人才）JGB 簽約提醒卡
-        const occupancy = String(input.formAnswers?.["入住人數"] || "").trim();
+        const occN = parseInt(String(input.formAnswers?.["入住人數"] || "").trim(), 10);
         const cards: any[] = [flexMessage, buildRenewalNodeCard(template.templateType)];
-        if (occupancy && occupancy !== "一人") cards.push(buildJgbCard(occupancy));
+        // 入住人數 > 1 才加發 JGB 雙人入住說明卡
+        if (!isNaN(occN) && occN > 1) cards.push(buildJgbCard(`${occN} 人`));
         (async () => {
           for (const c of cards) {
             const r = await pushLineDirect(input.uid, c);
