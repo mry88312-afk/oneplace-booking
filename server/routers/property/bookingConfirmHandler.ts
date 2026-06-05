@@ -104,15 +104,42 @@ function buildRenewalNodeCard(_templateType: string) {
 }
 
 /**
- * P36：入住非一人時加發的「雙人入住 JGB 填寫說明」卡。
- * 內容依雙人入住規範：身分資料 / 電話Email / 緊急聯絡人。
+ * P38：入住非一人時加發的「雙人入住 JGB 填寫說明」卡（圖像化分區版）。
+ * 重點修正：兩組電話中間用「.」(一個點) 隔開。
  */
 function buildJgbCard(occupancy: string) {
-  const sectionTitle = (text: string) => ({
-    type: "text" as const, text, weight: "bold" as const, color: "#4A6741", size: "sm" as const, margin: "lg" as const,
+  // 一列 label / value
+  const kv = (label: string, value: string) => ({
+    type: "box" as const, layout: "baseline" as const, spacing: "sm" as const,
+    contents: [
+      { type: "text" as const, text: label, size: "sm" as const, color: "#8C8C8C", flex: 2 },
+      { type: "text" as const, text: value, size: "sm" as const, color: "#333333", flex: 5, wrap: true },
+    ],
   });
-  const body = (text: string) => ({
-    type: "text" as const, text, size: "sm" as const, color: "#555555", wrap: true, margin: "sm" as const,
+  // 範例 chip
+  const example = (text: string) => ({
+    type: "box" as const, layout: "vertical" as const, backgroundColor: "#FFFFFF",
+    cornerRadius: "md" as const, paddingAll: "10px" as const, borderWidth: "1px" as const, borderColor: "#E3E0D8" as const,
+    margin: "sm" as const,
+    contents: [
+      { type: "text" as const, text: "範例", size: "xxs" as const, color: "#B6843E", weight: "bold" as const },
+      { type: "text" as const, text, size: "sm" as const, color: "#444444", wrap: true, margin: "xs" as const },
+    ],
+  });
+  // 區塊卡
+  const section = (emoji: string, title: string, accent: string, children: any[]) => ({
+    type: "box" as const, layout: "vertical" as const, backgroundColor: "#F6F5F1",
+    cornerRadius: "lg" as const, paddingAll: "14px" as const, spacing: "sm" as const, margin: "lg" as const,
+    contents: [
+      {
+        type: "box" as const, layout: "horizontal" as const, spacing: "sm" as const,
+        contents: [
+          { type: "text" as const, text: emoji, size: "lg" as const, flex: 0 },
+          { type: "text" as const, text: title, weight: "bold" as const, color: accent, size: "md" as const, gravity: "center" as const },
+        ],
+      },
+      ...children,
+    ],
   });
   return {
     type: "flex" as const,
@@ -123,29 +150,49 @@ function buildJgbCard(occupancy: string) {
       header: {
         type: "box",
         layout: "vertical",
-        contents: [
-          { type: "text", text: "📝 雙人入住 JGB 填寫說明", weight: "bold", color: "#FFFFFF", size: "md", wrap: true },
-          { type: "text", text: `入住人數：${occupancy}`, color: "#FDE8C8", size: "xs", margin: "sm" },
-        ],
-        backgroundColor: "#B6843E",
+        backgroundColor: "#4A6741",
         paddingAll: "20px",
+        contents: [
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "📝", size: "xl", flex: 0 },
+              { type: "text", text: "雙人入住 JGB 填寫", weight: "bold", color: "#FFFFFF", size: "lg", gravity: "center", wrap: true },
+            ],
+          },
+          { type: "text", text: `入住人數　${occupancy}`, color: "#D7E3D2", size: "xs", margin: "md" },
+        ],
       },
       body: {
         type: "box",
         layout: "vertical",
+        paddingAll: "16px",
         contents: [
-          sectionTitle("① 身分資料"),
-          body("• 名稱：填「第一人」姓名，前面加一個「/」（例：/王小明）\n• 姓氏：填「第二人」姓名（例：陳小華）\n• 證件號碼：兩人身分證字號中間用「/」隔開\n　例：A123456789／B987654321"),
-          { type: "separator", margin: "xl" },
-          sectionTitle("② 電話 / Email"),
-          body("• 兩組電話請「直接連續」輸入，中間不要加斜線或任何符號\n　例：09123456780987654321\n• 加了符號系統會無法送出\n• Email 填一組即可"),
-          { type: "separator", margin: "xl" },
-          sectionTitle("③ 緊急聯絡人"),
-          body("• 建議填「有血緣的親屬」(父母、兄弟姊妹) 或「夫妻」\n• 除非特殊狀況，請勿填「朋友」"),
-          { type: "separator", margin: "xl" },
-          { type: "text", text: "依上述格式填寫 JGB，有疑問請聯繫專員協助 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "lg" },
+          section("🪪", "身分資料", "#4A6741", [
+            kv("名稱", "填「第一人」姓名，前面加一個「/」"),
+            kv("姓氏", "填「第二人」姓名"),
+            kv("證件號碼", "兩人身分證字號中間用「/」隔開"),
+            example("名稱：/王小明\n姓氏：陳小華\n證件：A123456789／B987654321"),
+          ]),
+          section("📞", "電話 / Email", "#3B7BB0", [
+            kv("電話", "兩組號碼中間加一個「.」(點)"),
+            example("0912345678.0987654321"),
+            { type: "text", text: "⛔ 中間不要加斜線或其他符號，否則無法送出", size: "xs", color: "#C0392B", wrap: true, margin: "sm" },
+            kv("Email", "填一組即可"),
+          ]),
+          section("🚨", "緊急聯絡人", "#C2553D", [
+            { type: "text", text: "✅ 建議：有血緣的親屬（父母、兄弟姊妹）或夫妻", size: "sm", color: "#333333", wrap: true },
+            { type: "text", text: "⛔ 避免：填「朋友」（特殊狀況除外）", size: "sm", color: "#C0392B", wrap: true },
+          ]),
         ],
-        paddingAll: "20px",
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "12px",
+        contents: [
+          { type: "text", text: "依上述格式填寫 JGB，有疑問請聯繫專員協助 🙌", size: "xs", color: "#AAAAAA", wrap: true, align: "center" },
+        ],
       },
     },
   };
