@@ -169,8 +169,12 @@ function buildJgbCard(occupancy: string) {
       { type: "text", text: "⛔ 中間不要加斜線或其他符號，否則無法送出", size: "xs", color: "#C0392B", wrap: true, margin: "md" },
       kv("Email", "填一組即可"),
     ], "2 / 3"),
-    bubble(2, "🚨", "③ 緊急聯絡人", "#C2553D", [
-      { type: "text", text: "✅ 建議：有血緣的親屬（父母、兄弟姊妹）或夫妻", size: "sm", color: "#333333", wrap: true, margin: "md" },
+    bubble(2, "🏠", "③ 地址・緊急聯絡人", "#C2553D", [
+      kv("戶籍地址", "填「第一位」室友的戶籍地址"),
+      kv("通訊地址", "填「第二位」室友的戶籍地址"),
+      { type: "separator", margin: "md", color: "#ECE9E1" },
+      { type: "text", text: "緊急聯絡人", weight: "bold", color: "#C2553D", size: "sm", margin: "md" },
+      { type: "text", text: "✅ 建議：有血緣的親屬（父母、兄弟姊妹）或夫妻", size: "sm", color: "#333333", wrap: true, margin: "sm" },
       { type: "text", text: "⛔ 避免：填「朋友」（特殊狀況除外）", size: "sm", color: "#C0392B", wrap: true, margin: "sm" },
       { type: "text", text: "依上述格式填寫，有疑問請聯繫專員 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "lg" },
     ], "3 / 3"),
