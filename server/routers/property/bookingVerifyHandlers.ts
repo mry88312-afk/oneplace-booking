@@ -29,7 +29,7 @@ export async function handleVerifyTenantUid(input: {
   }
 
   const TENANT_TABLE = "for-system-use/2";
-  const UID_FIELD = "lineuid";
+  const UID_FIELD = "1007383"; // lineuid
   console.log("[Booking-Verify] ===== verifyTenantUid 開始 =====");
   console.log("[Booking-Verify] 輸入 UID:", input.uid);
   console.log("[Booking-Verify] 查詢表: ", TENANT_TABLE);
@@ -37,9 +37,11 @@ export async function handleVerifyTenantUid(input: {
   console.log("[Booking-Verify] 查詢條件: where=" + `${UID_FIELD},eq,${input.uid}`);
 
   let records: any[] = [];
+  // naming=EID：回傳以欄位 ID 當 key
   const data = await ragicGet(TENANT_TABLE, {
     where: `${UID_FIELD},eq,${input.uid}`,
     limit: "1",
+    naming: "EID",
   });
   records = Object.values(data) as any[];
   console.log("[Booking-Verify] Ragic where 回傳筆數:", records.length);
@@ -49,18 +51,19 @@ export async function handleVerifyTenantUid(input: {
     const ftsData = await ragicGet(TENANT_TABLE, {
       fts: input.uid,
       limit: "5",
+      naming: "EID",
     });
     const ftsRecords = Object.values(ftsData) as any[];
     console.log("[Booking-Verify] fts 回傳筆數:", ftsRecords.length);
-    records = ftsRecords.filter((r: any) => r["lineuid"] === input.uid);
+    records = ftsRecords.filter((r: any) => r["1007383"] === input.uid);
     console.log("[Booking-Verify] fts 過濾後匹配筆數:", records.length);
   }
 
   if (records.length > 0) {
     console.log("[Booking-Verify] 第一筆資料 key fields:", {
-      "房客姓名1": records[0]["房客姓名1"],
-      "連絡電話1": records[0]["連絡電話1"],
-      "lineuid": records[0]["lineuid"],
+      "1007373(姓名)": records[0]["1007373"],
+      "1007372(電話)": records[0]["1007372"],
+      "1007383(lineuid)": records[0]["1007383"],
       "_ragicId": records[0]["_ragicId"],
     });
   } else {
@@ -127,17 +130,18 @@ export async function handleVerifyByPhone(input: {
   const whereData = await ragicGet(TENANT_TABLE, {
     where: `${PHONE_FIELD_ID},eq,${normalizedPhone}`,
     limit: "10",
+    naming: "EID",
   });
   const allRecords = Object.values(whereData) as any[];
   console.log("[Booking-Phone] Ragic where (field ID 1007372) 查詢回傳筆數:", allRecords.length);
 
   if (allRecords.length > 0) {
     console.log("[Booking-Phone] 匹配到的第一筆:", {
-      "房客姓名1": allRecords[0]["房客姓名1"],
-      "連絡電話1": allRecords[0]["連絡電話1"],
-      "lineuid": allRecords[0]["lineuid"],
-      "目前入住房間": allRecords[0]["目前入住房間"],
-      "現居地址": allRecords[0]["現居地址"],
+      "1007373(姓名)": allRecords[0]["1007373"],
+      "1007372(電話)": allRecords[0]["1007372"],
+      "1007383(lineuid)": allRecords[0]["1007383"],
+      "1008436(房間)": allRecords[0]["1008436"],
+      "1008440(地址)": allRecords[0]["1008440"],
     });
   } else {
     console.log("[Booking-Phone] 電話查詢無結果（where + fts 均無）");
@@ -154,7 +158,7 @@ export async function handleVerifyByPhone(input: {
   const info = extractTenantInfo(record);
 
   const UID_WRITE_FIELD_ID = "1007383";
-  if (input.uid && info.ragicId && !record["lineuid"]) {
+  if (input.uid && info.ragicId && !record["1007383"]) {
     try {
       await ragicPut(TENANT_TABLE, info.ragicId, {
         [UID_WRITE_FIELD_ID]: input.uid,

@@ -570,14 +570,14 @@ export const bookingRouter = router({
       if (!RAGIC_API_KEY_VALUE) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ragic API 尚未設定" });
       }
-      const data = await ragicGet("for-system-use/2", { where: `1007372,eq,${input.phone}`, limit: "1" });
+      const data = await ragicGet("for-system-use/2", { where: `1007372,eq,${input.phone}`, limit: "1", naming: "EID" });
       const recs = Object.values(data).filter((r: any) => r && r["_ragicId"] !== undefined) as any[];
       if (recs.length === 0) {
         throw new TRPCError({ code: "NOT_FOUND", message: "查無租客資料" });
       }
       const rec = recs[0];
-      // 安全：若記錄已綁 lineuid 且有帶 uid，需相符
-      if (input.uid && rec["lineuid"] && rec["lineuid"] !== input.uid) {
+      // 安全：若記錄已綁 lineuid(1007383) 且有帶 uid，需相符
+      if (input.uid && rec["1007383"] && rec["1007383"] !== input.uid) {
         throw new TRPCError({ code: "FORBIDDEN", message: "身份不符，無法寫入" });
       }
       const ragicId = Number(rec["_ragicId"]);
