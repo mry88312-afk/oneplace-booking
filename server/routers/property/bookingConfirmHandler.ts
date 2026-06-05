@@ -103,6 +103,41 @@ function buildRenewalNodeCard(_templateType: string) {
   };
 }
 
+/**
+ * P35：入住非一人時加發的「JGB 簽約提醒」卡（預設文案，可再調整/補連結）。
+ */
+function buildJgbCard(occupancy: string) {
+  return {
+    type: "flex" as const,
+    altText: "JGB 簽約提醒（多人入住）",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: "📝 JGB 簽約提醒", weight: "bold", color: "#FFFFFF", size: "lg" },
+          { type: "text", text: `入住人數：${occupancy}`, color: "#FDE8C8", size: "xs", margin: "sm" },
+        ],
+        backgroundColor: "#B6843E",
+        paddingAll: "20px",
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          { type: "text", text: "因為入住不只一人，除了主約人外，其他入住者也需要在 JGB 完成簽署：", size: "sm", color: "#333333", wrap: true },
+          { type: "text", text: "1️⃣ 主約人先完成 JGB 簽約\n2️⃣ 將其他入住者的姓名與聯絡方式提供給專員\n3️⃣ 其他入住者依專員提供的 JGB 連結各自完成簽署\n4️⃣ 全部簽署完成後才算續約完成", size: "sm", color: "#555555", wrap: true },
+          { type: "text", text: "如有疑問請聯繫專員協助 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "md" },
+        ],
+        paddingAll: "20px",
+      },
+    },
+  };
+}
+
 export async function handleConfirmBooking(
   input: {
     projectId: string;
@@ -466,12 +501,16 @@ export async function handleConfirmBooking(
       };
 
       if (isRenewal) {
-        // 續約：確認卡 + 節點說明卡，依序直推（確保先確認卡、後節點卡）
-        const nodeCard = buildRenewalNodeCard(template.templateType);
-        pushLineDirect(input.uid, flexMessage)
-          .then((r) => { if (!r.success) console.error("[Booking] 續約確認卡直推失敗:", r.error); return pushLineDirect(input.uid, nodeCard); })
-          .then((r2: any) => { if (r2 && !r2.success) console.warn("[Booking] 續約節點卡發送失敗:", r2.error); })
-          .catch((e: any) => console.error("[Booking] 續約雙卡推送例外:", e?.message));
+        // 續約：依序直推 確認卡 → 節點說明卡 →（入住非一人才）JGB 簽約提醒卡
+        const occupancy = String(input.formAnswers?.["入住人數"] || "").trim();
+        const cards: any[] = [flexMessage, buildRenewalNodeCard(template.templateType)];
+        if (occupancy && occupancy !== "一人") cards.push(buildJgbCard(occupancy));
+        (async () => {
+          for (const c of cards) {
+            const r = await pushLineDirect(input.uid, c);
+            if (!r.success) console.error("[Booking] 續約卡推送失敗:", r.error);
+          }
+        })().catch((e: any) => console.error("[Booking] 續約多卡推送例外:", e?.message));
       }
 
       if (!isRenewal) {
