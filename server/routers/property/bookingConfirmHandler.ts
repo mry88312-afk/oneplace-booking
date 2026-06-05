@@ -154,6 +154,7 @@ export async function handleConfirmBooking(
   if (!bundle)
     throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在或已停用" });
   const template = bundle.template;
+  const isRenewal = template.templateType === "續約" || template.projectId === "renewal";
 
   // 1. 寫入 Ragic 任務表
   let ragicRecordId = "";
@@ -325,6 +326,22 @@ export async function handleConfirmBooking(
       ];
       if (input.roomNumber) infoRows.push({ label: "房間", value: input.roomNumber });
       if (input.address) infoRows.push({ label: "地址", value: input.address });
+      // P30：續約卡片顯示問卷答案（繳費方式 / 是否變更入住人數 / 續約備註）
+      if (isRenewal && input.formAnswers) {
+        for (const f of bundle.fields) {
+          if (!["text", "select", "checkbox"].includes(f.fieldType)) continue;
+          let v = input.formAnswers[f.label];
+          if (v === undefined || v === null || String(v).trim() === "") continue;
+          v = String(v);
+          if (v.includes("__other__")) {
+            const otherText = (input.formAnswers as Record<string, string>)[`${f.label}__other`] || "";
+            v = v.split(",").filter(Boolean).map((x) => (x.trim() === "__other__" ? (otherText ? `其他：${otherText}` : "其他") : x.trim())).filter(Boolean).join("、");
+          } else {
+            v = v.split(",").filter(Boolean).join("、");
+          }
+          if (v) infoRows.push({ label: f.label, value: v });
+        }
+      }
       // P26：續約卡片附上虛擬帳號，讓租客知道匯款帳號
       if (input.virtualAccount) {
         infoRows.push({ label: "銀行", value: "822 中國信託" });
@@ -448,7 +465,6 @@ export async function handleConfirmBooking(
         },
       };
 
-      const isRenewal = template.templateType === "續約" || template.projectId === "renewal";
       if (isRenewal) {
         // 續約：確認卡 + 節點說明卡，依序直推（確保先確認卡、後節點卡）
         const nodeCard = buildRenewalNodeCard(template.templateType);

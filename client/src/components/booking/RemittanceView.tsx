@@ -43,21 +43,22 @@ async function postJson(path: string, body: any): Promise<any> {
 
 interface RemittanceViewProps {
   template: any;
-  /** 驗證後帶入的姓名（可編輯） */
+  /** 驗證後帶入的姓名（顯示用） */
   name: string;
   /** 驗證後帶入的電話（產 VA / 發 OTP 用） */
   phone: string;
+  /** 既有 email（顯示用） */
+  existingEmail?: string;
   /** LINE userId（推虛擬帳號卡片用） */
   uid: string | null;
   /** 完成後續約流程繼續（回到 calendar / preset form），帶回虛擬帳號供確認卡顯示 */
   onComplete: (virtualAccount?: string) => void;
 }
 
-export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewProps) {
+export function RemittanceView({ name, phone, existingEmail = "", uid, onComplete }: RemittanceViewProps) {
   const normalizedPhone = (phone || "").replace(/\D/g, "");
   const [sub, setSub] = useState<"form" | "otp" | "done">("form");
 
-  const [email, setEmail] = useState("");
   const [job, setJob] = useState("");
   const writeVA = trpc.booking.writeRenewalVirtualAccount.useMutation();
 
@@ -111,13 +112,11 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
     if (!/^\d{8,15}$/.test(normalizedPhone)) {
       return toast.error("檔內電話格式有誤，請聯繫客服");
     }
-    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      return toast.error("電子郵件格式有誤");
-    }
+    if (!job.trim()) return toast.error("請填寫職業");
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
-        phone: normalizedPhone, name, email: email.trim(), job: job.trim(),
+        phone: normalizedPhone, name, email: existingEmail, job: job.trim(),
       });
       if (r.success) {
         if (r.devMode) toast.success("開發模式：請用固定驗證碼");
@@ -144,7 +143,7 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
-        phone: normalizedPhone, name, email: email.trim(), job: job.trim(),
+        phone: normalizedPhone, name, email: existingEmail, job: job.trim(),
       });
       if (r.success) { toast.success("驗證碼已重新發送"); clearOtp(); startCountdown(); }
       else toast.error(r.message || "發送失敗");
@@ -173,7 +172,7 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
           uid: uid || undefined,
           phone: normalizedPhone,
           virtualAccount: va,
-          email: email.trim() || undefined,
+          email: existingEmail || undefined,
           job: job.trim() || undefined,
         });
       } catch (e: any) {
@@ -212,7 +211,7 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
             <p className="text-sm text-gray-500">完成付款設定，取得中信專屬固定式匯款帳號</p>
           </div>
           <div className="space-y-4">
-            {/* 姓名、電話直接顯示既有資料，不需填寫 */}
+            {/* 姓名、電話、Email 直接顯示既有資料，不需填寫 */}
             <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">姓名</span>
@@ -222,15 +221,14 @@ export function RemittanceView({ name, phone, uid, onComplete }: RemittanceViewP
                 <span className="text-gray-500">手機號碼</span>
                 <span className="font-semibold text-gray-900">{normalizedPhone || "—"}</span>
               </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">電子郵件</span>
+                <span className="font-semibold text-gray-900 break-all text-right">{existingEmail || "—"}</span>
+              </div>
             </div>
-            <p className="text-xs text-gray-400">以下為選填，如需更新個人資料再填寫，否則留空即可。</p>
             <div>
-              <Label className="text-sm font-medium text-gray-700">電子郵件（選填）</Label>
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1.5 h-11" placeholder="如需更新再填" />
-            </div>
-            <div>
-              <Label className="text-sm font-medium text-gray-700">職業（選填）</Label>
-              <Input value={job} onChange={(e) => setJob(e.target.value)} className="mt-1.5 h-11" placeholder="如需更新再填" />
+              <Label className="text-sm font-medium text-gray-700">職業 <span className="text-red-500">*</span></Label>
+              <Input value={job} onChange={(e) => setJob(e.target.value)} className="mt-1.5 h-11" placeholder="例：軟體工程師" />
             </div>
             <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
               onClick={handleSendOtp} disabled={sending}>

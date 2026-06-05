@@ -197,16 +197,17 @@ export async function ragicExecuteButton(ragicPath: string, ragicId: number, but
 export function extractTenantInfo(record: any) {
   const tenantName = record["房客姓名1"] || record["姓名"] || record["租客姓名"] || record["Name"] || "";
   const phone = record["連絡電話1"] || "";
+  const email = record["1007542"] || record["Email"] || record["電子郵件"] || record["電子信箱"] || record["E-mail"] || "";
   const ragicId = record["_ragicId"];
-  
+
   let roomNumber = record["目前入住房間"] || "";
   let propertyName = record["案場簡稱"] || "";
   let address = record["現居地址"] || "";
   let contractStatus = record["最新契約狀態"] || "";
   let contractId = record["最新合約編號"] || "";
   let propertyId = record["案場編號"] || "";
-  
-  return { tenantName, phone, roomNumber, propertyName, address, contractStatus, contractId, propertyId, ragicId };
+
+  return { tenantName, phone, email, roomNumber, propertyName, address, contractStatus, contractId, propertyId, ragicId };
 }
 
 /** 從 service-department/4 合約表查詢房源資訊（用電話或姓名） */
