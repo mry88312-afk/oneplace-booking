@@ -108,9 +108,12 @@ function buildRenewalNodeCard(_templateType: string) {
  * 每張卡上方可放一張照片（JGB_CARD_IMAGES，待補短網址）。
  * 重點：兩組電話中間用「.」(一個點) 隔開。
  */
-// 三張卡上方照片網址（依序：身分 / 電話Email / 緊急聯絡人）。留空則該卡不放圖。
-// 可用單一網址放三張、或各自不同；之後填入即可。
-const JGB_CARD_IMAGES: (string | undefined)[] = [undefined, undefined, undefined];
+// 三張卡上方照片（直接圖片網址，3:4 直式）：① 身分・電話 / ② 地址 / ③ 緊急聯絡人
+const JGB_CARD_IMAGES: (string | undefined)[] = [
+  "https://ppt.cc/fSV7gx@.jpg",
+  "https://ppt.cc/fZ4JKx@.jpg",
+  "https://ppt.cc/fywOYx@.jpg",
+];
 
 function buildJgbCard(occupancy: string) {
   const kv = (label: string, value: string) => ({
@@ -152,31 +155,28 @@ function buildJgbCard(occupancy: string) {
       },
     };
     const img = JGB_CARD_IMAGES[idx];
-    if (img) b.hero = { type: "image", url: img, size: "full", aspectRatio: "20:11", aspectMode: "cover" };
+    if (img) b.hero = { type: "image", url: img, size: "full", aspectRatio: "3:4", aspectMode: "cover" };
     return b;
   };
 
+  const warn = (text: string) => ({ type: "text" as const, text, size: "xs" as const, color: "#C0392B", wrap: true, margin: "sm" as const });
   const cards = [
-    bubble(0, "🪪", "① 身分資料", "#4A6741", [
-      kv("名稱", "填「第一人」姓名，前面加一個「/」"),
-      kv("姓氏", "填「第二人」姓名"),
-      kv("證件號碼", "兩人身分證字號中間用「/」隔開"),
-      example("名稱：/王小明\n姓氏：陳小華\n證件：A123456789／B987654321"),
-    ], `入住人數 ${occupancy}　·　1 / 3`),
-    bubble(1, "📞", "② 電話 / Email", "#3B7BB0", [
+    bubble(0, "🪪", "① 身分・電話", "#4A6741", [
+      kv("名稱", "填第一人姓名，前面加一個「/」"),
+      kv("姓氏", "填第二人姓名"),
+      kv("證件號碼", "兩人身分證中間用「/」隔開"),
       kv("電話", "兩組號碼中間加一個「.」(點)"),
-      example("0912345678.0987654321"),
-      { type: "text", text: "⛔ 中間不要加斜線或其他符號，否則無法送出", size: "xs", color: "#C0392B", wrap: true, margin: "md" },
+      warn("⛔ 電話勿加斜線或其他符號，否則無法送出"),
       kv("Email", "填一組即可"),
-    ], "2 / 3"),
-    bubble(2, "🏠", "③ 地址・緊急聯絡人", "#C2553D", [
+    ], `入住人數 ${occupancy}　·　1 / 3`),
+    bubble(1, "🏠", "② 地址", "#3B7BB0", [
       kv("戶籍地址", "填「第一位」室友的戶籍地址"),
       kv("通訊地址", "填「第二位」室友的戶籍地址"),
-      { type: "separator", margin: "md", color: "#ECE9E1" },
-      { type: "text", text: "緊急聯絡人", weight: "bold", color: "#C2553D", size: "sm", margin: "md" },
-      { type: "text", text: "✅ 建議：有血緣的親屬（父母、兄弟姊妹）或夫妻", size: "sm", color: "#333333", wrap: true, margin: "sm" },
+    ], "2 / 3"),
+    bubble(2, "🚨", "③ 緊急聯絡人", "#C2553D", [
+      { type: "text", text: "✅ 建議：有血緣的親屬（父母、兄弟姊妹）或夫妻", size: "sm", color: "#333333", wrap: true, margin: "md" },
       { type: "text", text: "⛔ 避免：填「朋友」（特殊狀況除外）", size: "sm", color: "#C0392B", wrap: true, margin: "sm" },
-      { type: "text", text: "依上述格式填寫，有疑問請聯繫專員 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "lg" },
+      { type: "text", text: "有疑問請聯繫專員協助 🙌", size: "xs", color: "#AAAAAA", wrap: true, margin: "lg" },
     ], "3 / 3"),
   ];
 
