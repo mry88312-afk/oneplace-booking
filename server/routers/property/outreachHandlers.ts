@@ -91,6 +91,25 @@ async function hasActiveBookingSuppress(tenantUid: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** 每個 rule 的通知列文字（altText）；bare bubble 包成 flex message 時用 */
+const RULE_ALT_TEXT: Record<string, string> = {
+  onboarding_d15: "一方生活｜入住問候 🏠",
+  expiry_d60: "一方生活｜租約續約提醒 📄",
+  expiry_d30: "一方生活｜租約即將到期 📄",
+  expiry_d15: "一方生活｜租約到期提醒 ⏰",
+};
+
+/**
+ * 把 bare bubble / carousel 包成合法的 LINE flex message（已經是完整 message 物件就原樣回傳）。
+ * LINE push 的 message 必須是 flex/text/image…，不能直接送 {type:'bubble'}。
+ */
+export function toFlexMessage(card: any, altText?: string): any {
+  if (card && (card.type === "bubble" || card.type === "carousel")) {
+    return { type: "flex", altText: altText || "一方生活通知", contents: card };
+  }
+  return card;
+}
+
 export type RunResult = { sent: number; suppressed: number; failed: number; skipped: number; errors: { id: string; error: string }[] };
 
 /**
@@ -130,7 +149,10 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         result.suppressed++;
         continue;
       }
-      const message = renderTemplate(row.card_template, computeVars(row));
+      const message = toFlexMessage(
+        renderTemplate(row.card_template, computeVars(row)),
+        RULE_ALT_TEXT[row.rule_key],
+      );
       const push = await pushLineDirect(row.tenant_uid, message);
       if (push.success) {
         await sbQuery(
@@ -162,10 +184,8 @@ export async function pushTestCard(
   altText?: string,
   vars?: Record<string, string>,
 ): Promise<{ success: boolean; error?: string }> {
-  let msg = vars && Object.keys(vars).length ? renderTemplate(card, vars) : card;
-  if (msg && (msg.type === "bubble" || msg.type === "carousel")) {
-    msg = { type: "flex", altText: altText || "測試卡片", contents: msg };
-  }
+  const rendered = vars && Object.keys(vars).length ? renderTemplate(card, vars) : card;
+  const msg = toFlexMessage(rendered, altText || "測試卡片");
   return await pushLineDirect(uid, msg);
 }
 
