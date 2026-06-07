@@ -91,7 +91,7 @@ async function hasActiveBookingSuppress(tenantUid: string): Promise<boolean> {
   return rows.length > 0;
 }
 
-export type RunResult = { sent: number; suppressed: number; failed: number; skipped: number };
+export type RunResult = { sent: number; suppressed: number; failed: number; skipped: number; errors: { id: string; error: string }[] };
 
 /**
  * 對指定的 schedule_ids 執行發送 gate。
@@ -100,7 +100,7 @@ export type RunResult = { sent: number; suppressed: number; failed: number; skip
  * - 發送成功 → status=sent + sent_at；失敗或例外 → 維持原狀以利下次重試
  */
 export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
-  const result: RunResult = { sent: 0, suppressed: 0, failed: 0, skipped: 0 };
+  const result: RunResult = { sent: 0, suppressed: 0, failed: 0, skipped: 0, errors: [] };
   if (!isSupabaseConfigured()) throw new Error("SUPABASE_DB_URL not set");
   if (!Array.isArray(scheduleIds) || scheduleIds.length === 0) return result;
 
@@ -141,10 +141,12 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       } else {
         console.error(`[outreach] push failed for ${row.id}: ${push.error}`);
         result.failed++; // 維持原狀，下次重試
+        result.errors.push({ id: row.id, error: push.error || "push failed" });
       }
     } catch (err: any) {
       console.error(`[outreach] error on ${row.id}: ${err?.message || err}`);
       result.failed++; // 維持原狀，下次重試
+      result.errors.push({ id: row.id, error: String(err?.message || err) });
     }
   }
   return result;

@@ -74,8 +74,14 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
     onError: (e) => toast.error(e.message),
   });
   const sendNow = trpc.outreach.sendNow.useMutation({
-    onSuccess: (r) => {
-      toast.success(`發送完成：sent ${r.sent}・suppressed ${r.suppressed}・failed ${r.failed}・skipped ${r.skipped}`);
+    onSuccess: (r: any) => {
+      if (r.failed > 0 && r.errors?.length) {
+        toast.error(`發送失敗：${r.errors[0].error}`);
+      } else if (r.suppressed > 0) {
+        toast.info("已抑制（該室友已預約續約/退租），未發送");
+      } else {
+        toast.success(`發送完成：sent ${r.sent}・suppressed ${r.suppressed}・failed ${r.failed}・skipped ${r.skipped}`);
+      }
       utils.outreach.listSchedule.invalidate();
     },
     onError: (e) => toast.error(e.message),
