@@ -345,8 +345,9 @@ export const outreachRouter = router({
         params.push(input.excludeHqCategories);
         sets.push(`exclude_hq_categories=$${params.length}`);
       }
-      if (input.runEndpointUrl !== undefined) {
-        params.push(input.runEndpointUrl);
+      // 防呆：空字串視為「不變更」，避免表單在未載入時誤把 URL 清空
+      if (input.runEndpointUrl !== undefined && input.runEndpointUrl.trim() !== "") {
+        params.push(input.runEndpointUrl.trim());
         sets.push(`run_endpoint_url=$${params.length}`);
       }
       if (input.runSecret !== undefined && input.runSecret !== "") {

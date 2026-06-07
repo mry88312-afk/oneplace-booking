@@ -324,13 +324,15 @@ function SettingsTab() {
       <Separator />
       <div>
         <Label className="text-sm font-semibold">Zeabur run 端點 URL</Label>
-        <Input value={runUrl} onChange={(e) => setRunUrl(e.target.value)} className="mt-1" placeholder="https://你的網域/api/outreach/run" />
+        <Input value={runUrl} onChange={(e) => setRunUrl(e.target.value)} className="mt-1" placeholder="https://你的網域/api/outreach/run" autoComplete="off" />
         <p className="text-xs text-muted-foreground mt-1">Supabase pg_cron 會 POST 到此 URL 派送卡片。</p>
       </div>
       <div>
         <Label className="text-sm font-semibold">共享密鑰（run secret）</Label>
         <Input
           type="password"
+          name="outreach_run_secret"
+          autoComplete="new-password"
           value={runSecret}
           onChange={(e) => setRunSecret(e.target.value)}
           className="mt-1"
@@ -342,15 +344,22 @@ function SettingsTab() {
       </div>
       <div className="flex justify-end">
         <Button
-          onClick={() =>
-            update.mutate({
-              includeOwnershipRegions: parseList(include),
-              excludeHqCategories: parseList(exclude),
-              runEndpointUrl: runUrl.trim(),
-              runSecret: runSecret || undefined,
-            })
-          }
-          disabled={update.isPending}
+          onClick={() => {
+            // 防呆：只送有填的欄位，空欄位一律忽略（不會覆蓋既有 URL / 密鑰 / 篩選）
+            const payload: Record<string, unknown> = {};
+            const inc = parseList(include);
+            const exc = parseList(exclude);
+            if (inc.length) payload.includeOwnershipRegions = inc;
+            if (exc.length) payload.excludeHqCategories = exc;
+            if (runUrl.trim()) payload.runEndpointUrl = runUrl.trim();
+            if (runSecret) payload.runSecret = runSecret;
+            if (Object.keys(payload).length === 0) {
+              toast.info("沒有要更新的欄位（空欄位會被忽略，不會覆蓋既有設定）");
+              return;
+            }
+            update.mutate(payload);
+          }}
+          disabled={update.isPending || !settingsQuery.data}
         >
           {update.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
           儲存設定
