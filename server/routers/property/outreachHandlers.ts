@@ -241,7 +241,7 @@ export const outreachRouter = router({
       return { ok: true };
     }),
 
-  /** 列出排程（預設未來；可帶 status/from/to 過濾） */
+  /** 列出排程（可帶 status / ruleKey / search(姓名/房號/案場/合約號) / from / to 過濾） */
   listSchedule: adminProcedure
     .input(
       z
@@ -249,6 +249,11 @@ export const outreachRouter = router({
           status: z
             .enum(["pending", "confirmed", "sent", "skipped", "cancelled", "suppressed"])
             .optional(),
+          statuses: z
+            .array(z.enum(["pending", "confirmed", "sent", "skipped", "cancelled", "suppressed"]))
+            .optional(),
+          ruleKey: z.string().optional(),
+          search: z.string().optional(),
           from: z.string().optional(),
           to: z.string().optional(),
           limit: z.number().int().min(1).max(2000).optional(),
@@ -259,25 +264,65 @@ export const outreachRouter = router({
       if (!isSupabaseConfigured()) return [];
       const clauses: string[] = [];
       const params: any[] = [];
-      if (input?.status) {
+      if (input?.statuses && input.statuses.length) {
+        params.push(input.statuses);
+        clauses.push(`status = any($${params.length})`);
+      } else if (input?.status) {
         params.push(input.status);
         clauses.push(`status = $${params.length}`);
+      }
+      if (input?.ruleKey) {
+        params.push(input.ruleKey);
+        clauses.push(`rule_key = $${params.length}`);
+      }
+      if (input?.search && input.search.trim()) {
+        params.push(`%${input.search.trim()}%`);
+        clauses.push(
+          `(tenant_name ilike $${params.length} or room ilike $${params.length} or property_name ilike $${params.length} or contract_no ilike $${params.length})`,
+        );
       }
       if (input?.from) {
         params.push(input.from);
         clauses.push(`scheduled_date >= $${params.length}`);
-      } else if (!input?.status) {
+      } else if (!input?.status && !input?.statuses) {
         clauses.push(`scheduled_date >= current_date`); // 預設只看未來
       }
       if (input?.to) {
         params.push(input.to);
         clauses.push(`scheduled_date <= $${params.length}`);
       }
-      params.push(input?.limit ?? 500);
+      params.push(input?.limit ?? 1000);
+      const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+      // 歷史（已發送/抑制/跳過）依事件時間倒序；未來排程依排定日正序
+      const orderBy =
+        input?.status === "sent" || input?.status === "suppressed" || input?.status === "skipped"
+          ? "updated_at desc nulls last"
+          : "scheduled_date asc, tenant_name asc nulls last";
+      return await sbQuery(
+        `select ${SCHEDULE_COLS}, to_char(updated_at,'YYYY-MM-DD HH24:MI') as updated_at
+         from outreach.schedule ${where} order by ${orderBy} limit $${params.length}`,
+        params,
+      );
+    }),
+
+  /** 統計：在 from/to 區間內，各 rule × status 的數量（看板上方一目瞭然用） */
+  scheduleSummary: adminProcedure
+    .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
+    .query(async ({ input }) => {
+      if (!isSupabaseConfigured()) return [];
+      const clauses: string[] = [];
+      const params: any[] = [];
+      if (input?.from) {
+        params.push(input.from);
+        clauses.push(`scheduled_date >= $${params.length}`);
+      }
+      if (input?.to) {
+        params.push(input.to);
+        clauses.push(`scheduled_date <= $${params.length}`);
+      }
       const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
       return await sbQuery(
-        `select ${SCHEDULE_COLS} from outreach.schedule ${where}
-         order by scheduled_date asc, tenant_name asc nulls last limit $${params.length}`,
+        `select rule_key, status, count(*)::int as n from outreach.schedule ${where} group by rule_key, status`,
         params,
       );
     }),

@@ -63,62 +63,134 @@ const CARD_PROMPT = `你是「一方生活」週期詢問 LINE 卡片設計助�
 （在這裡描述：卡片主題、文案重點、要哪些按鈕、按鈕連到哪…）`;
 
 // ── 排程看板 ──────────────────────────────────────────────────────────────────
-function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
-  const [statusFilter, setStatusFilter] = useState<string>("upcoming");
-  const listInput = statusFilter === "upcoming" ? undefined : { status: statusFilter as any };
-  const scheduleQuery = trpc.outreach.listSchedule.useQuery(listInput, { refetchOnWindowFocus: false });
-  const utils = trpc.useUtils();
+const RULE_OPTIONS = [
+  { key: "all", label: "全部卡別" },
+  { key: "onboarding_d15", label: "入住問候 +15" },
+  { key: "expiry_d60", label: "續約 −60" },
+  { key: "expiry_d30", label: "續約 −30" },
+  { key: "expiry_d15", label: "催約 −15" },
+];
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function computeRange(preset: string, cFrom: string, cTo: string): { from?: string; to?: string } {
+  const today = new Date();
+  const t = ymd(today);
+  if (preset === "week") { const s = new Date(today); s.setDate(today.getDate() + ((7 - today.getDay()) % 7)); return { from: t, to: ymd(s) }; }
+  if (preset === "month") { return { from: t, to: ymd(new Date(today.getFullYear(), today.getMonth() + 1, 0)) }; }
+  if (preset === "next30") { const s = new Date(today); s.setDate(today.getDate() + 30); return { from: t, to: ymd(s) }; }
+  if (preset === "future") { return { from: t }; }
+  if (preset === "custom") { return { from: cFrom || undefined, to: cTo || undefined }; }
+  return {};
+}
 
-  const updateItem = trpc.outreach.updateScheduleItem.useMutation({
-    onSuccess: () => { utils.outreach.listSchedule.invalidate(); },
-    onError: (e) => toast.error(e.message),
-  });
+function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
+  const [view, setView] = useState<"upcoming" | "history">("upcoming");
+  const [preset, setPreset] = useState<string>("week");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [ruleFilter, setRuleFilter] = useState<string>("all");
+  const [historyStatus, setHistoryStatus] = useState<string>("sent");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+
+  const range = view === "upcoming" ? computeRange(preset, customFrom, customTo) : {};
+  const listInput: any = { ruleKey: ruleFilter === "all" ? undefined : ruleFilter, search: search || undefined, ...range };
+  if (view === "upcoming") listInput.statuses = ["pending", "confirmed"];
+  else listInput.status = historyStatus;
+
+  const scheduleQuery = trpc.outreach.listSchedule.useQuery(listInput, { refetchOnWindowFocus: false });
+  const summaryQuery = trpc.outreach.scheduleSummary.useQuery(view === "upcoming" ? range : {}, { refetchOnWindowFocus: false });
+  const utils = trpc.useUtils();
+  const invalidate = () => { utils.outreach.listSchedule.invalidate(); utils.outreach.scheduleSummary.invalidate(); };
+
+  const updateItem = trpc.outreach.updateScheduleItem.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
   const sendNow = trpc.outreach.sendNow.useMutation({
     onSuccess: (r: any) => {
-      if (r.failed > 0 && r.errors?.length) {
-        toast.error(`發送失敗：${r.errors[0].error}`);
-      } else if (r.suppressed > 0) {
-        toast.info("已抑制（該室友已預約續約/退租），未發送");
-      } else {
-        toast.success(`發送完成：sent ${r.sent}・suppressed ${r.suppressed}・failed ${r.failed}・skipped ${r.skipped}`);
-      }
-      utils.outreach.listSchedule.invalidate();
+      if (r.failed > 0 && r.errors?.length) toast.error(`發送失敗：${r.errors[0].error}`);
+      else if (r.suppressed > 0) toast.info("已抑制（該室友已預約續約/退租），未發送");
+      else toast.success(`發送完成：sent ${r.sent}・suppressed ${r.suppressed}・failed ${r.failed}・skipped ${r.skipped}`);
+      invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
   const recompute = trpc.outreach.recomputeNow.useMutation({
-    onSuccess: (r) => { toast.success(`已重算排程，新增 ${r.inserted} 筆`); utils.outreach.listSchedule.invalidate(); },
+    onSuccess: (r) => { toast.success(`已重算排程，新增 ${r.inserted} 筆`); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
 
   const [rescheduleRow, setRescheduleRow] = useState<{ id: string; date: string } | null>(null);
-
   const rows = scheduleQuery.data || [];
+
+  const summary = (summaryQuery.data || []) as any[];
+  const ruleCount = (rk: string) =>
+    summary.filter((s) => s.rule_key === rk && (s.status === "pending" || s.status === "confirmed")).reduce((a, s) => a + s.n, 0);
+  const totalCount = ["onboarding_d15", "expiry_d60", "expiry_d30", "expiry_d15"].reduce((a, k) => a + ruleCount(k), 0);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+        <div className="inline-flex rounded-md border overflow-hidden">
+          <button type="button" className={`px-3 py-1.5 text-sm ${view === "upcoming" ? "bg-primary text-primary-foreground" : "bg-background"}`} onClick={() => setView("upcoming")}>未來要發</button>
+          <button type="button" className={`px-3 py-1.5 text-sm ${view === "history" ? "bg-primary text-primary-foreground" : "bg-background"}`} onClick={() => setView("history")}>歷史紀錄</button>
+        </div>
+        {view === "upcoming" ? (
+          <Select value={preset} onValueChange={setPreset}>
+            <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="week">本週</SelectItem>
+              <SelectItem value="month">本月</SelectItem>
+              <SelectItem value="next30">未來 30 天</SelectItem>
+              <SelectItem value="future">全部未來</SelectItem>
+              <SelectItem value="custom">自訂區間</SelectItem>
+            </SelectContent>
+          </Select>
+        ) : (
+          <Select value={historyStatus} onValueChange={setHistoryStatus}>
+            <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="sent">已發送</SelectItem>
+              <SelectItem value="suppressed">已抑制</SelectItem>
+              <SelectItem value="skipped">已跳過</SelectItem>
+              <SelectItem value="cancelled">已取消</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+        {view === "upcoming" && preset === "custom" && (
+          <>
+            <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="w-36" />
+            <span className="text-muted-foreground text-sm">~</span>
+            <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="w-36" />
+          </>
+        )}
+        <Select value={ruleFilter} onValueChange={setRuleFilter}>
+          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="upcoming">未來排程</SelectItem>
-            <SelectItem value="pending">待確認</SelectItem>
-            <SelectItem value="confirmed">已確認</SelectItem>
-            <SelectItem value="sent">已發送</SelectItem>
-            <SelectItem value="skipped">已跳過</SelectItem>
-            <SelectItem value="suppressed">已抑制</SelectItem>
-            <SelectItem value="cancelled">已取消</SelectItem>
+            {RULE_OPTIONS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" onClick={() => scheduleQuery.refetch()}>
-          <RefreshCw className="h-3.5 w-3.5 mr-1" /> 重新整理
-        </Button>
+        <div className="flex items-center gap-1">
+          <Input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput); }} placeholder="搜尋姓名/房號/案場" className="w-44" autoComplete="off" />
+          <Button variant="outline" size="sm" onClick={() => setSearch(searchInput)}>搜尋</Button>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => { scheduleQuery.refetch(); summaryQuery.refetch(); }}><RefreshCw className="h-3.5 w-3.5 mr-1" /> 重新整理</Button>
         <Button variant="outline" size="sm" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
-          {recompute.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1" />}
-          重算排程
+          {recompute.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1" />} 重算排程
         </Button>
-        <span className="text-sm text-muted-foreground ml-auto">{rows.length} 筆</span>
       </div>
+
+      {view === "upcoming" ? (
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          <span className="font-semibold">此區間待發 {totalCount} 筆：</span>
+          <span className="px-2 py-0.5 rounded-full bg-slate-100">入住問候 {ruleCount("onboarding_d15")}</span>
+          <span className="px-2 py-0.5 rounded-full bg-blue-100">續約−60 {ruleCount("expiry_d60")}</span>
+          <span className="px-2 py-0.5 rounded-full bg-amber-100">續約−30 {ruleCount("expiry_d30")}</span>
+          <span className="px-2 py-0.5 rounded-full bg-red-100">催約−15 {ruleCount("expiry_d15")}</span>
+          <span className="text-muted-foreground ml-auto">顯示 {rows.length} 筆</span>
+        </div>
+      ) : (
+        <div className="text-xs text-muted-foreground">顯示 {rows.length} 筆{rows.length >= 1000 ? "（已達上限，請用搜尋或日期縮小範圍）" : ""}</div>
+      )}
 
       {scheduleQuery.isLoading ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -140,6 +212,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
                         <span className="font-mono text-sm font-semibold">{r.scheduled_date}</span>
                         <Badge variant="outline">{ruleLabels[r.rule_key] || r.rule_key}</Badge>
                         <span className={`text-xs px-2 py-0.5 rounded-full ${st.color}`}>{st.label}</span>
+                        {r.status === "sent" && r.sent_at && <span className="text-[10px] text-muted-foreground">發送於 {String(r.sent_at).replace("T", " ").slice(0, 16)}</span>}
                         {r.manually_edited && <span className="text-[10px] text-muted-foreground">（已手動調整）</span>}
                       </div>
                       <div className="text-sm text-muted-foreground truncate">
