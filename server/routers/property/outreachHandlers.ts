@@ -135,10 +135,32 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
     [scheduleIds],
   );
 
+  // 測試模式：設定了 test_redirect_uid 時，所有發送一律改寄到它（永不送真實室友）
+  const redirect =
+    (
+      await sbQuery<{ u: string | null }>(
+        `select nullif(trim(test_redirect_uid),'') as u from outreach.settings where id=1`,
+      )
+    )[0]?.u || null;
+
   for (const row of rows) {
     try {
       if (row.status !== "pending" && row.status !== "confirmed") {
         result.skipped++;
+        continue;
+      }
+      if (redirect) {
+        // 測試模式：改寄到測試 LINE、跳過防重、不改原排程狀態（可重複測、永不送真人）
+        const tmsg = toFlexMessage(
+          renderTemplate(row.card_template, computeVars(row)),
+          "【測試】" + (RULE_ALT_TEXT[row.rule_key] || "一方生活通知"),
+        );
+        const tpush = await pushLineDirect(redirect, tmsg);
+        if (tpush.success) result.sent++;
+        else {
+          result.failed++;
+          result.errors.push({ id: row.id, error: tpush.error || "push failed" });
+        }
         continue;
       }
       if (await hasActiveBookingSuppress(row.tenant_uid)) {
@@ -375,7 +397,8 @@ export const outreachRouter = router({
     if (!isSupabaseConfigured()) return null;
     const rows = await sbQuery(
       `select include_ownership_regions, exclude_hq_categories, run_endpoint_url,
-              (run_secret is not null and run_secret <> '') as run_secret_set
+              (run_secret is not null and run_secret <> '') as run_secret_set,
+              test_redirect_uid
          from outreach.settings where id=1`,
     );
     return rows[0] ?? null;
@@ -389,11 +412,17 @@ export const outreachRouter = router({
         excludeHqCategories: z.array(z.string()).optional(),
         runEndpointUrl: z.string().optional(),
         runSecret: z.string().optional(),
+        testRedirectUid: z.string().optional(),
       }),
     )
     .mutation(async ({ input }) => {
       const sets: string[] = [];
       const params: any[] = [];
+      // 測試模式重導：空字串 = 清除（關閉測試模式）；有值 = 開啟並重導到該 uid
+      if (input.testRedirectUid !== undefined) {
+        params.push(input.testRedirectUid.trim() === "" ? null : input.testRedirectUid.trim());
+        sets.push(`test_redirect_uid=$${params.length}`);
+      }
       // 防呆：空陣列視為「不變更」，避免表單在未載入時誤把篩選集合清空（清空 include 會導致 recompute 算不出任何排程）
       if (input.includeOwnershipRegions !== undefined && input.includeOwnershipRegions.length > 0) {
         params.push(input.includeOwnershipRegions);

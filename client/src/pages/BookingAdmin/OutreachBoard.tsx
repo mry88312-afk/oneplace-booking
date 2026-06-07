@@ -358,6 +358,7 @@ function SettingsTab() {
   const [runUrl, setRunUrl] = useState("");
   const [runSecret, setRunSecret] = useState("");
   const [secretSet, setSecretSet] = useState(false);
+  const [testRedirect, setTestRedirect] = useState("");
 
   useEffect(() => {
     const d: any = settingsQuery.data;
@@ -366,6 +367,7 @@ function SettingsTab() {
     setExclude((d.exclude_hq_categories || []).join(", "));
     setRunUrl(d.run_endpoint_url || "");
     setSecretSet(!!d.run_secret_set);
+    setTestRedirect(d.test_redirect_uid || "");
   }, [settingsQuery.data]);
 
   const update = trpc.outreach.updateSettings.useMutation({
@@ -377,6 +379,25 @@ function SettingsTab() {
 
   return (
     <div className="space-y-4 max-w-xl">
+      <Card className={settingsQuery.data?.test_redirect_uid ? "border-amber-400 bg-amber-50" : "border-dashed"}>
+        <CardContent className="py-4 space-y-2">
+          <Label className="text-sm font-semibold">🧪 測試模式（重導發送）</Label>
+          <p className="text-xs text-muted-foreground">
+            填入一個 LINE uid 後，<b>所有發送（立即送＋每日自動派送）都會改寄到這個 uid、永遠不會送給真實室友</b>，
+            且不改動原排程狀態（可重複測）。測試完請按「關閉」，才會開始對真實室友發送。
+          </p>
+          <Input value={testRedirect} onChange={(e) => setTestRedirect(e.target.value)} className="mt-1" placeholder="Uxxxxxxxx...（留空＝關閉）" autoComplete="off" />
+          <div className="flex gap-2 justify-end">
+            <Button size="sm" variant="outline" onClick={() => { setTestRedirect(""); update.mutate({ testRedirectUid: "" }); }} disabled={update.isPending}>
+              關閉測試模式
+            </Button>
+            <Button size="sm" onClick={() => update.mutate({ testRedirectUid: testRedirect.trim() })} disabled={update.isPending || !testRedirect.trim()}>
+              開啟 / 更新
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <Separator />
       <div>
         <Label className="text-sm font-semibold">案件歸屬（ownership_region）include set</Label>
         <Input value={include} onChange={(e) => setInclude(e.target.value)} className="mt-1" placeholder="總公司" />
@@ -488,11 +509,19 @@ function TestSendTab() {
 export function OutreachBoard() {
   const health = trpc.outreach.health.useQuery(undefined, { refetchOnWindowFocus: false });
   const rulesQuery = trpc.outreach.listRules.useQuery(undefined, { refetchOnWindowFocus: false });
+  const settingsQuery = trpc.outreach.getSettings.useQuery(undefined, { refetchOnWindowFocus: false });
+  const testUid = (settingsQuery.data as any)?.test_redirect_uid as string | null | undefined;
   const ruleLabels: Record<string, string> = {};
   for (const r of (rulesQuery.data || []) as any[]) ruleLabels[r.key] = r.label;
 
   return (
     <div className="space-y-4">
+      {testUid && (
+        <div className="flex items-start gap-2 p-3 rounded-md bg-amber-100 text-amber-900 text-sm border border-amber-400">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>🧪 <b>測試模式開啟中</b>：所有發送（立即送＋每日自動派送）都會改寄到 <code>{testUid.slice(0, 10)}…</code>，<b>不會送給真實室友</b>。要正式對室友發送，請到「篩選 / 設定」按「關閉測試模式」。</span>
+        </div>
+      )}
       {health.data && !health.data.supabaseConfigured && (
         <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 text-amber-800 text-sm">
           <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
