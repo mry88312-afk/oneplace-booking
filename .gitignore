@@ -9,3 +9,5 @@ dist/
 .idea/
 coverage/
 .cache/
+# 本專案刻意不使用 lockfile（Zeabur 用 npm install 解析）
+package-lock.json

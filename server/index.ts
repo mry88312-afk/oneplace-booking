@@ -4,6 +4,7 @@ process.env.TZ = "UTC";
 import "dotenv/config";
 import express from "express";
 import compression from "compression";
+import crypto from "node:crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createServer } from "http";
@@ -51,6 +52,31 @@ async function startServer() {
     }),
   );
 
+  // 週期詢問：Supabase pg_cron 透過 pg_net 呼叫此端點，派送「到期且已確認」的卡片。
+  // 需帶共享密鑰 header（x-outreach-secret 必須等於環境變數 OUTREACH_RUN_SECRET）。
+  app.post("/api/outreach/run", async (req, res) => {
+    const expected = process.env.OUTREACH_RUN_SECRET;
+    if (!expected) {
+      return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
+    }
+    const got = String(req.header("x-outreach-secret") || "");
+    const a = Buffer.from(got);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const ids = Array.isArray(req.body?.schedule_ids) ? req.body.schedule_ids : [];
+    try {
+      const { runOutreach } = await import("./routers/property/outreachHandlers");
+      const result = await runOutreach(ids);
+      console.log(`[outreach] run for ${ids.length} ids → ${JSON.stringify(result)}`);
+      return res.json({ ok: true, result });
+    } catch (err: any) {
+      console.error("[outreach] run error:", err?.message || err);
+      return res.status(500).json({ error: err?.message || "error" });
+    }
+  });
+
   // 靜態檔案（前端 build 後的 SPA）
   if (process.env.NODE_ENV === "production") {
     const clientDist = path.resolve(__dirname, "public");
@@ -87,6 +113,8 @@ const shutdown = async () => {
   console.log("[oneplace-booking] Closing database pool...");
   const { closeDb } = await import("./db");
   await closeDb();
+  const { closeSupabasePool } = await import("./db/supabaseClient");
+  await closeSupabasePool();
   process.exit(0);
 };
 process.on("SIGTERM", shutdown);

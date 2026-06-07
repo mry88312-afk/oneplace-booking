@@ -18,6 +18,7 @@ import {
 
 import { RoutingRuleEditor, TimeSelect, FormFieldEditor, BookingRecordsPanel } from "./BookingAdmin/index";
 import type { RoutingRule, FormFieldDef } from "./BookingAdmin/index";
+import { OutreachBoard } from "./BookingAdmin/OutreachBoard";
 
 // ─── 常數 ───────────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ const STEPS = [
 // ─── 主頁面 ──────────────────────────────────────────────────────────────────────
 
 export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
+  const [view, setView] = useState<"templates" | "outreach">("templates");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
@@ -295,15 +297,29 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
             <p className="text-sm text-muted-foreground mt-1">建立和管理租務預約模版，產生預約連結供租客使用</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> 新增模版</Button>
+            {view === "templates" && (
+              <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> 新增模版</Button>
+            )}
             {onLogout && (
               <Button variant="outline" size="sm" onClick={onLogout}>登出</Button>
             )}
           </div>
         </div>
 
+        {/* 主分頁：預約模版 / 週期詢問 */}
+        <div className="flex items-center gap-1 border-b">
+          <button type="button" onClick={() => setView("templates")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${view === "templates" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+            預約模版
+          </button>
+          <button type="button" onClick={() => setView("outreach")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${view === "outreach" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+            週期詢問
+          </button>
+        </div>
+
         {/* 模版列表 */}
-        {templates.length === 0 ? (
+        {view === "templates" && (templates.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-16">
               <CalendarDays className="h-12 w-12 text-muted-foreground/40 mb-4" />
@@ -351,7 +367,9 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
               </Card>
             ))}
           </div>
-        )}
+        ))}
+
+        {view === "outreach" && <OutreachBoard />}
 
         {/* 建立/編輯 Dialog */}
         <Dialog open={showCreateDialog} onOpenChange={(v) => { if (!v) { setShowCreateDialog(false); setEditingId(null); resetForm(); } }}>
