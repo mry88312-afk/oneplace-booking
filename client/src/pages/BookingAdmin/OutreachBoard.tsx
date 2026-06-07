@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -15,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
-  Loader2, Send, CalendarClock, SkipForward, Check, RotateCcw, RefreshCw, Save, AlertTriangle, Copy, Sparkles,
+  Loader2, Send, CalendarClock, SkipForward, Check, RotateCcw, RefreshCw, Save, AlertTriangle, Copy, Sparkles, Eye, Download,
 } from "lucide-react";
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -76,6 +77,7 @@ function ymd(d: Date) {
 function computeRange(preset: string, cFrom: string, cTo: string): { from?: string; to?: string } {
   const today = new Date();
   const t = ymd(today);
+  if (preset === "today") { return { from: t, to: t }; }
   if (preset === "week") { const s = new Date(today); s.setDate(today.getDate() + ((7 - today.getDay()) % 7)); return { from: t, to: ymd(s) }; }
   if (preset === "month") { return { from: t, to: ymd(new Date(today.getFullYear(), today.getMonth() + 1, 0)) }; }
   if (preset === "next30") { const s = new Date(today); s.setDate(today.getDate() + 30); return { from: t, to: ymd(s) }; }
@@ -84,8 +86,36 @@ function computeRange(preset: string, cFrom: string, cTo: string): { from?: stri
   return {};
 }
 
+/** 把目前清單匯出成 CSV（UTF-8 BOM，Excel 開啟中文正常）。 */
+function exportCsv(rows: any[], filename: string) {
+  const cols = ["scheduled_date", "tenant_name", "room", "property_name", "rule_key", "status", "sent_at", "attempt_count", "last_error"];
+  const header = ["排定日", "姓名", "房號", "案場", "卡別", "狀態", "發送時間", "嘗試次數", "最後錯誤"];
+  const esc = (v: any) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const body = rows.map((r) => cols.map((c) => esc(r[c])).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + header.join(",") + "\r\n" + body], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/** 批次操作結果摘要：成功 N、失敗 M（附第一筆錯誤）。 */
+function summarizeBatch(results: { ok: boolean; error?: string }[], label: string) {
+  const ok = results.filter((r) => r.ok).length;
+  const fail = results.length - ok;
+  if (fail === 0) toast.success(`${label}：成功 ${ok} 筆`);
+  else toast.warning(`${label}：成功 ${ok}、失敗 ${fail}（例：${results.find((r) => !r.ok)?.error || ""}）`);
+}
+
 function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
-  const [view, setView] = useState<"upcoming" | "history">("upcoming");
+  const [view, setView] = useState<"upcoming" | "history" | "failed">("upcoming");
   const [preset, setPreset] = useState<string>("week");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -93,11 +123,14 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
   const [historyStatus, setHistoryStatus] = useState<string>("sent");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [groupByProp, setGroupByProp] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const range = view === "upcoming" ? computeRange(preset, customFrom, customTo) : {};
   const listInput: any = { ruleKey: ruleFilter === "all" ? undefined : ruleFilter, search: search || undefined, ...range };
   if (view === "upcoming") listInput.statuses = ["pending", "confirmed"];
-  else listInput.status = historyStatus;
+  else if (view === "history") listInput.status = historyStatus;
+  else listInput.onlyFailed = true;
 
   const scheduleQuery = trpc.outreach.listSchedule.useQuery(listInput, { refetchOnWindowFocus: false });
   const summaryQuery = trpc.outreach.scheduleSummary.useQuery(view === "upcoming" ? range : {}, { refetchOnWindowFocus: false });
@@ -118,6 +151,20 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
     onSuccess: (r) => { toast.success(`已重算排程，新增 ${r.inserted} 筆`); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  const batchUpdate = trpc.outreach.updateScheduleItemsBatch.useMutation({
+    onSuccess: (res: any) => { summarizeBatch(res.results, "批次處理"); setSelected(new Set()); invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const batchSend = trpc.outreach.sendNowBatch.useMutation({
+    onSuccess: (res: any) => { summarizeBatch(res.results, "批次立即送"); setSelected(new Set()); invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const preview = trpc.outreach.previewScheduleItem.useMutation({
+    onSuccess: (r: any) => toast.success(`已送至測試對象 ${String(r.redirectedTo || "").slice(0, 10)}…（室友不會收到）`),
+    onError: (e) => toast.error(e.message),
+  });
+
+  useEffect(() => { setSelected(new Set()); }, [view, preset, ruleFilter, historyStatus, search, customFrom, customTo]);
 
   const [rescheduleRow, setRescheduleRow] = useState<{ id: string; date: string } | null>(null);
   const rows = scheduleQuery.data || [];
@@ -127,17 +174,98 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
     summary.filter((s) => s.rule_key === rk && (s.status === "pending" || s.status === "confirmed")).reduce((a, s) => a + s.n, 0);
   const totalCount = ["onboarding_d15", "expiry_d60", "expiry_d30", "expiry_d15"].reduce((a, k) => a + ruleCount(k), 0);
 
+  const batchBusy = batchUpdate.isPending || batchSend.isPending;
+  const allVisibleSelected = rows.length > 0 && rows.every((r: any) => selected.has(r.id));
+  const toggleAll = () => setSelected(allVisibleSelected ? new Set() : new Set(rows.map((r: any) => r.id)));
+  const toggleOne = (id: string) =>
+    setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  const rowCard = (r: any) => {
+    const st = STATUS_MAP[r.status] || { label: r.status, color: "bg-muted text-muted-foreground" };
+    const canSend = r.status === "pending" || r.status === "confirmed";
+    return (
+      <Card key={r.id}>
+        <CardContent className="py-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-2 flex-1 min-w-0">
+              <Checkbox className="mt-1" checked={selected.has(r.id)} onCheckedChange={() => toggleOne(r.id)} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="font-mono text-sm font-semibold">{r.scheduled_date}</span>
+                  <Badge variant="outline">{ruleLabels[r.rule_key] || r.rule_key}</Badge>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${st.color}`}>{st.label}</span>
+                  {r.status === "sent" && r.sent_at && <span className="text-[10px] text-muted-foreground">發送於 {String(r.sent_at).replace("T", " ").slice(0, 16)}</span>}
+                  {r.manually_edited && <span className="text-[10px] text-muted-foreground">（已手動調整）</span>}
+                </div>
+                <div className="text-sm text-muted-foreground truncate">
+                  {r.tenant_name || "（無姓名）"}
+                  {r.room ? `・${r.room}` : ""}
+                  {r.property_name ? `・${r.property_name}` : ""}
+                  {r.contract_no ? `・${r.contract_no}` : ""}
+                  {r.contract_end_date ? `・到期 ${r.contract_end_date}` : ""}
+                </div>
+                {r.suppressed_reason && <div className="text-xs text-purple-700 mt-1">{r.suppressed_reason}</div>}
+                {r.last_error && (
+                  <div className="text-xs text-red-600 mt-1">
+                    ⚠ 第 {r.attempt_count} 次嘗試失敗：{r.last_error}{r.last_attempt_at ? `（${r.last_attempt_at}）` : ""}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+              <Button size="sm" variant="ghost" onClick={() => preview.mutate({ id: r.id })} disabled={preview.isPending} title="送到測試對象預覽，室友不會收到">
+                <Eye className="h-3.5 w-3.5 mr-1" /> 預覽
+              </Button>
+              {r.status === "pending" && (
+                <Button size="sm" variant="outline" onClick={() => updateItem.mutate({ id: r.id, action: "confirm" })}>
+                  <Check className="h-3.5 w-3.5 mr-1" /> 確認
+                </Button>
+              )}
+              {r.status === "confirmed" && (
+                <Button size="sm" variant="outline" onClick={() => updateItem.mutate({ id: r.id, action: "unconfirm" })}>取消確認</Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => setRescheduleRow({ id: r.id, date: r.scheduled_date })}>
+                <CalendarClock className="h-3.5 w-3.5 mr-1" /> 改期
+              </Button>
+              {(r.status === "pending" || r.status === "confirmed") && (
+                <Button size="sm" variant="ghost" onClick={() => updateItem.mutate({ id: r.id, action: "skip" })}>
+                  <SkipForward className="h-3.5 w-3.5 mr-1" /> 跳過
+                </Button>
+              )}
+              {(canSend || view === "failed") && (
+                <Button size="sm" onClick={() => sendNow.mutate({ id: r.id })} disabled={sendNow.isPending}>
+                  {sendNow.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Send className="h-3.5 w-3.5 mr-1" />}
+                  {view === "failed" ? "重送" : "立即送"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const groups = groupByProp
+    ? (() => {
+        const m = new Map<string, any[]>();
+        for (const r of rows as any[]) { const k = r.property_name || "（無案場）"; if (!m.has(k)) m.set(k, []); m.get(k)!.push(r); }
+        return [...m.entries()].map(([name, items]) => ({ name, items })).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+      })()
+    : null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
         <div className="inline-flex rounded-md border overflow-hidden">
           <button type="button" className={`px-3 py-1.5 text-sm ${view === "upcoming" ? "bg-primary text-primary-foreground" : "bg-background"}`} onClick={() => setView("upcoming")}>未來要發</button>
           <button type="button" className={`px-3 py-1.5 text-sm ${view === "history" ? "bg-primary text-primary-foreground" : "bg-background"}`} onClick={() => setView("history")}>歷史紀錄</button>
+          <button type="button" className={`px-3 py-1.5 text-sm ${view === "failed" ? "bg-primary text-primary-foreground" : "bg-background"}`} onClick={() => setView("failed")}>失敗清單</button>
         </div>
-        {view === "upcoming" ? (
+        {view === "upcoming" && (
           <Select value={preset} onValueChange={setPreset}>
             <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
             <SelectContent>
+              <SelectItem value="today">今天</SelectItem>
               <SelectItem value="week">本週</SelectItem>
               <SelectItem value="month">本月</SelectItem>
               <SelectItem value="next30">未來 30 天</SelectItem>
@@ -145,7 +273,8 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
               <SelectItem value="custom">自訂區間</SelectItem>
             </SelectContent>
           </Select>
-        ) : (
+        )}
+        {view === "history" && (
           <Select value={historyStatus} onValueChange={setHistoryStatus}>
             <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -173,7 +302,11 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
           <Input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput); }} placeholder="搜尋姓名/房號/案場" className="w-44" autoComplete="off" />
           <Button variant="outline" size="sm" onClick={() => setSearch(searchInput)}>搜尋</Button>
         </div>
+        <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+          <Checkbox checked={groupByProp} onCheckedChange={(v) => setGroupByProp(!!v)} /> 依案場分組
+        </label>
         <Button variant="outline" size="sm" onClick={() => { scheduleQuery.refetch(); summaryQuery.refetch(); }}><RefreshCw className="h-3.5 w-3.5 mr-1" /> 重新整理</Button>
+        <Button variant="outline" size="sm" onClick={() => exportCsv(rows, `outreach_${view}_${ymd(new Date())}.csv`)} disabled={!rows.length}><Download className="h-3.5 w-3.5 mr-1" /> 匯出 CSV</Button>
         <Button variant="outline" size="sm" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
           {recompute.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1" />} 重算排程
         </Button>
@@ -192,71 +325,47 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
         <div className="text-xs text-muted-foreground">顯示 {rows.length} 筆{rows.length >= 1000 ? "（已達上限，請用搜尋或日期縮小範圍）" : ""}</div>
       )}
 
+      {rows.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap rounded-md border bg-muted/40 px-3 py-2">
+          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+            <Checkbox checked={allVisibleSelected} onCheckedChange={toggleAll} /> 全選
+          </label>
+          <span className="text-sm text-muted-foreground">已選 {selected.size} 筆</span>
+          <div className="flex items-center gap-1.5 ml-auto">
+            <Button size="sm" variant="outline" disabled={!selected.size || batchBusy} onClick={() => batchUpdate.mutate({ ids: [...selected], action: "confirm" })}>
+              <Check className="h-3.5 w-3.5 mr-1" /> 確認所選
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selected.size || batchBusy} onClick={() => batchUpdate.mutate({ ids: [...selected], action: "skip" })}>
+              <SkipForward className="h-3.5 w-3.5 mr-1" /> 跳過所選
+            </Button>
+            <Button size="sm" disabled={!selected.size || batchBusy} onClick={() => batchSend.mutate({ ids: [...selected] })}>
+              {batchSend.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Send className="h-3.5 w-3.5 mr-1" />} 立即送所選
+            </Button>
+            {selected.size > 0 && <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>清除</Button>}
+          </div>
+        </div>
+      )}
+
       {scheduleQuery.isLoading ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin mr-2" /> 載入中...
         </div>
       ) : rows.length === 0 ? (
-        <div className="text-center py-12 text-sm text-muted-foreground">沒有符合條件的排程</div>
-      ) : (
-        <div className="space-y-2">
-          {rows.map((r: any) => {
-            const st = STATUS_MAP[r.status] || { label: r.status, color: "bg-muted text-muted-foreground" };
-            const canSend = r.status === "pending" || r.status === "confirmed";
-            return (
-              <Card key={r.id}>
-                <CardContent className="py-3">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-mono text-sm font-semibold">{r.scheduled_date}</span>
-                        <Badge variant="outline">{ruleLabels[r.rule_key] || r.rule_key}</Badge>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${st.color}`}>{st.label}</span>
-                        {r.status === "sent" && r.sent_at && <span className="text-[10px] text-muted-foreground">發送於 {String(r.sent_at).replace("T", " ").slice(0, 16)}</span>}
-                        {r.manually_edited && <span className="text-[10px] text-muted-foreground">（已手動調整）</span>}
-                      </div>
-                      <div className="text-sm text-muted-foreground truncate">
-                        {r.tenant_name || "（無姓名）"}
-                        {r.room ? `・${r.room}` : ""}
-                        {r.contract_no ? `・${r.contract_no}` : ""}
-                        {r.contract_end_date ? `・到期 ${r.contract_end_date}` : ""}
-                      </div>
-                      {r.suppressed_reason && (
-                        <div className="text-xs text-purple-700 mt-1">{r.suppressed_reason}</div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {r.status === "pending" && (
-                        <Button size="sm" variant="outline" onClick={() => updateItem.mutate({ id: r.id, action: "confirm" })}>
-                          <Check className="h-3.5 w-3.5 mr-1" /> 確認
-                        </Button>
-                      )}
-                      {r.status === "confirmed" && (
-                        <Button size="sm" variant="outline" onClick={() => updateItem.mutate({ id: r.id, action: "unconfirm" })}>
-                          取消確認
-                        </Button>
-                      )}
-                      <Button size="sm" variant="outline" onClick={() => setRescheduleRow({ id: r.id, date: r.scheduled_date })}>
-                        <CalendarClock className="h-3.5 w-3.5 mr-1" /> 改期
-                      </Button>
-                      {(r.status === "pending" || r.status === "confirmed") && (
-                        <Button size="sm" variant="ghost" onClick={() => updateItem.mutate({ id: r.id, action: "skip" })}>
-                          <SkipForward className="h-3.5 w-3.5 mr-1" /> 跳過
-                        </Button>
-                      )}
-                      {canSend && (
-                        <Button size="sm" onClick={() => sendNow.mutate({ id: r.id })} disabled={sendNow.isPending}>
-                          {sendNow.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Send className="h-3.5 w-3.5 mr-1" />}
-                          立即送
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className="text-center py-12 text-sm text-muted-foreground">{view === "failed" ? "沒有發送失敗的排程 🎉" : "沒有符合條件的排程"}</div>
+      ) : groups ? (
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <div key={g.name} className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <span>{g.name}</span>
+                <Badge variant="secondary">{g.items.length} 筆</Badge>
+              </div>
+              <div className="space-y-2">{g.items.map(rowCard)}</div>
+            </div>
+          ))}
         </div>
+      ) : (
+        <div className="space-y-2">{rows.map(rowCard)}</div>
       )}
 
       {/* 改期 Dialog */}
@@ -296,12 +405,14 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
   const [label, setLabel] = useState(rule.label ?? "");
   const [offsetDays, setOffsetDays] = useState<number>(rule.offset_days ?? 0);
   const [enabled, setEnabled] = useState<boolean>(!!rule.enabled);
+  const [autoConfirm, setAutoConfirm] = useState<boolean>(!!rule.auto_confirm);
   const [templateText, setTemplateText] = useState(JSON.stringify(rule.card_template, null, 2));
 
   useEffect(() => {
     setLabel(rule.label ?? "");
     setOffsetDays(rule.offset_days ?? 0);
     setEnabled(!!rule.enabled);
+    setAutoConfirm(!!rule.auto_confirm);
     setTemplateText(JSON.stringify(rule.card_template, null, 2));
   }, [rule]);
 
@@ -318,7 +429,7 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
       toast.error("卡片 JSON 格式錯誤，請檢查");
       return;
     }
-    updateRule.mutate({ key: rule.key, label, offsetDays, enabled, cardTemplate: parsed });
+    updateRule.mutate({ key: rule.key, label, offsetDays, enabled, autoConfirm, cardTemplate: parsed });
   };
 
   return (
@@ -354,6 +465,18 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
             </p>
           </div>
         </div>
+        <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 bg-muted/30">
+          <div className="min-w-0">
+            <Label className="text-xs font-semibold">自動確認（auto_confirm）</Label>
+            <p className="text-[11px] text-muted-foreground">開啟後，此規則新產生的排程會直接設為「已確認」、到期當天自動派送，<b>免人工確認</b>（仍受測試模式與發送前防重保護）。預設關閉。</p>
+          </div>
+          <Switch checked={autoConfirm} onCheckedChange={setAutoConfirm} />
+        </div>
+        {autoConfirm && (
+          <div className="flex items-start gap-1.5 text-[11px] text-amber-700">
+            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> 此規則將免人工確認自動發送，請先確認卡片內容無誤、並在測試模式下驗證過。
+          </div>
+        )}
         <div>
           <Label className="text-xs">卡片 JSON（LINE Flex message 物件）</Label>
           <Textarea
@@ -578,6 +701,66 @@ function TestSendTab() {
   );
 }
 
+// ── 成效統計 Tab ───────────────────────────────────────────────────────────────
+function StatsTab() {
+  const [months, setMonths] = useState(6);
+  const statsQuery = trpc.outreach.getOutreachStats.useQuery({ months }, { refetchOnWindowFocus: false });
+  const data = statsQuery.data as any;
+  const buckets = (data?.buckets || []) as any[];
+  const threshold = data?.threshold ?? 0.2;
+  const maxBar = Math.max(1, ...buckets.map((b) => b.sent + b.failed + b.suppressed));
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div className="flex items-center gap-2">
+        <Label className="text-sm">統計區間</Label>
+        <Select value={String(months)} onValueChange={(v) => setMonths(Number(v))}>
+          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="3">近 3 個月</SelectItem>
+            <SelectItem value="6">近 6 個月</SelectItem>
+            <SelectItem value="12">近 12 個月</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" onClick={() => statsQuery.refetch()}><RefreshCw className="h-3.5 w-3.5 mr-1" /> 重新整理</Button>
+      </div>
+      {statsQuery.isLoading ? (
+        <div className="flex items-center justify-center py-12 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin mr-2" /> 載入中...</div>
+      ) : buckets.length === 0 ? (
+        <div className="text-center py-12 text-sm text-muted-foreground">目前沒有發送紀錄</div>
+      ) : (
+        <div className="space-y-2">
+          {buckets.map((b) => (
+            <Card key={b.month} className={b.warn ? "border-red-300" : ""}>
+              <CardContent className="py-3 space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-1">
+                  <span className="font-mono font-semibold">{b.month}</span>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-green-700">已發送 {b.sent}</span>
+                    <span className="text-purple-700">已抑制 {b.suppressed}</span>
+                    <span className="text-red-600">失敗 {b.failed}</span>
+                    <span className={b.warn ? "text-red-600 font-semibold" : "text-muted-foreground"}>失敗率 {(b.ratio * 100).toFixed(1)}%</span>
+                    {b.warn && (
+                      <span className="inline-flex items-center gap-1 text-red-600 font-semibold">
+                        <AlertTriangle className="h-3.5 w-3.5" /> 低送達率
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex h-2.5 w-full overflow-hidden rounded bg-muted">
+                  <div className="bg-green-500" style={{ width: `${(b.sent / maxBar) * 100}%` }} />
+                  <div className="bg-purple-400" style={{ width: `${(b.suppressed / maxBar) * 100}%` }} />
+                  <div className="bg-red-500" style={{ width: `${(b.failed / maxBar) * 100}%` }} />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+          <p className="text-[11px] text-muted-foreground">失敗率 = 失敗 ÷（已發送 ＋ 失敗）；超過 {(threshold * 100).toFixed(0)}% 標示「低送達率」。失敗定義：曾嘗試發送但未成功且留有錯誤訊息。</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 主元件 ─────────────────────────────────────────────────────────────────────
 export function OutreachBoard() {
   const health = trpc.outreach.health.useQuery(undefined, { refetchOnWindowFocus: false });
@@ -605,6 +788,7 @@ export function OutreachBoard() {
         <TabsList>
           <TabsTrigger value="schedule">排程看板</TabsTrigger>
           <TabsTrigger value="rules">規則 / 卡片</TabsTrigger>
+          <TabsTrigger value="stats">成效</TabsTrigger>
           <TabsTrigger value="settings">篩選 / 設定</TabsTrigger>
           <TabsTrigger value="test">測試發送</TabsTrigger>
         </TabsList>
@@ -613,6 +797,9 @@ export function OutreachBoard() {
         </TabsContent>
         <TabsContent value="rules" className="mt-4">
           <RulesTab />
+        </TabsContent>
+        <TabsContent value="stats" className="mt-4">
+          <StatsTab />
         </TabsContent>
         <TabsContent value="settings" className="mt-4">
           <SettingsTab />

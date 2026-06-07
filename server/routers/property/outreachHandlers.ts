@@ -112,6 +112,42 @@ export function toFlexMessage(card: any, altText?: string): any {
 
 export type RunResult = { sent: number; suppressed: number; failed: number; skipped: number; errors: { id: string; error: string }[] };
 
+/** 發送失敗時回寫追蹤欄位（last_error / last_attempt_at / attempt_count）。僅用於真實發送路徑；測試模式不回寫，保持可重複測、不污染計數。 */
+async function markSendFailure(id: string, errMsg: string): Promise<void> {
+  await sbQuery(
+    `update outreach.schedule
+        set last_error=$2, last_attempt_at=now(), attempt_count=coalesce(attempt_count,0)+1, updated_at=now()
+      where id=$1`,
+    [id, String(errMsg || "send failed").slice(0, 1000)],
+  );
+}
+
+/** 確認單筆（僅 pending/skipped 可確認）；回報是否成功與原因，供批次重用。 */
+async function confirmOne(id: string): Promise<{ id: string; ok: boolean; error?: string }> {
+  const r = await sbQuery<{ id: string }>(
+    `update outreach.schedule set status='confirmed', updated_at=now()
+      where id=$1 and status in ('pending','skipped') returning id`,
+    [id],
+  );
+  if (r.length) return { id, ok: true };
+  const cur = await sbQuery<{ status: string }>(`select status from outreach.schedule where id=$1`, [id]);
+  if (!cur.length) return { id, ok: false, error: "查無此排程" };
+  return { id, ok: false, error: `目前狀態為 ${cur[0].status}，僅 pending/skipped 可確認` };
+}
+
+/** 跳過單筆（已發送/取消者不可跳過）；回報是否成功與原因，供批次重用。 */
+async function skipOne(id: string): Promise<{ id: string; ok: boolean; error?: string }> {
+  const r = await sbQuery<{ id: string }>(
+    `update outreach.schedule set status='skipped', updated_at=now()
+      where id=$1 and status in ('pending','confirmed','skipped') returning id`,
+    [id],
+  );
+  if (r.length) return { id, ok: true };
+  const cur = await sbQuery<{ status: string }>(`select status from outreach.schedule where id=$1`, [id]);
+  if (!cur.length) return { id, ok: false, error: "查無此排程" };
+  return { id, ok: false, error: `目前狀態為 ${cur[0].status}，無法跳過` };
+}
+
 /**
  * 對指定的 schedule_ids 執行發送 gate。
  * - 非 pending/confirmed 的列 → skipped（避免重送已 sent/cancelled/skipped）
@@ -178,17 +214,21 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       const push = await pushLineDirect(row.tenant_uid, message);
       if (push.success) {
         await sbQuery(
-          `update outreach.schedule set status='sent', sent_at=now(), updated_at=now() where id=$1`,
+          `update outreach.schedule set status='sent', sent_at=now(), last_error=null, updated_at=now() where id=$1`,
           [row.id],
         );
         result.sent++;
       } else {
         console.error(`[outreach] push failed for ${row.id}: ${push.error}`);
-        result.failed++; // 維持原狀，下次重試
+        await markSendFailure(row.id, push.error || "push failed"); // status 不變、可重試，記錄失敗
+        result.failed++;
         result.errors.push({ id: row.id, error: push.error || "push failed" });
       }
     } catch (err: any) {
       console.error(`[outreach] error on ${row.id}: ${err?.message || err}`);
+      if (!redirect) {
+        try { await markSendFailure(row.id, String(err?.message || err)); } catch {}
+      }
       result.failed++; // 維持原狀，下次重試
       result.errors.push({ id: row.id, error: String(err?.message || err) });
     }
@@ -216,10 +256,11 @@ export async function pushTestCard(
 // ──────────────────────────────────────────────────────────────────────────
 
 const SCHEDULE_COLS =
-  `id, tenant_uid, tenant_name, room, contract_no,
+  `id, tenant_uid, tenant_name, room, property_name, contract_no,
    to_char(contract_end_date,'YYYY-MM-DD') as contract_end_date,
    rule_key, to_char(scheduled_date,'YYYY-MM-DD') as scheduled_date,
-   status, manually_edited, suppressed_reason, sent_at`;
+   status, manually_edited, suppressed_reason, sent_at,
+   last_error, to_char(last_attempt_at,'YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count`;
 
 export const outreachRouter = router({
   /** 後台是否已接上 Supabase（給前端顯示提示用） */
@@ -256,6 +297,7 @@ export const outreachRouter = router({
           search: z.string().optional(),
           from: z.string().optional(),
           to: z.string().optional(),
+          onlyFailed: z.boolean().optional(),
           limit: z.number().int().min(1).max(2000).optional(),
         })
         .optional(),
@@ -281,10 +323,13 @@ export const outreachRouter = router({
           `(tenant_name ilike $${params.length} or room ilike $${params.length} or property_name ilike $${params.length} or contract_no ilike $${params.length})`,
         );
       }
+      if (input?.onlyFailed) {
+        clauses.push(`status <> 'sent' and attempt_count > 0 and last_error is not null`);
+      }
       if (input?.from) {
         params.push(input.from);
         clauses.push(`scheduled_date >= $${params.length}`);
-      } else if (!input?.status && !input?.statuses) {
+      } else if (!input?.status && !input?.statuses && !input?.onlyFailed) {
         clauses.push(`scheduled_date >= current_date`); // 預設只看未來
       }
       if (input?.to) {
@@ -294,8 +339,9 @@ export const outreachRouter = router({
       params.push(input?.limit ?? 1000);
       const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
       // 歷史（已發送/抑制/跳過）依事件時間倒序；未來排程依排定日正序
-      const orderBy =
-        input?.status === "sent" || input?.status === "suppressed" || input?.status === "skipped"
+      const orderBy = input?.onlyFailed
+        ? "last_attempt_at desc nulls last"
+        : input?.status === "sent" || input?.status === "suppressed" || input?.status === "skipped"
           ? "updated_at desc nulls last"
           : "scheduled_date asc, tenant_name asc nulls last";
       return await sbQuery(
@@ -381,6 +427,123 @@ export const outreachRouter = router({
       return await runOutreach([input.id]);
     }),
 
+  /** 批次：對多筆一次確認 / 跳過（逐筆回報，個別失敗不中斷其餘） */
+  updateScheduleItemsBatch: adminProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().uuid()).min(1).max(500),
+        action: z.enum(["confirm", "skip"]),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const results: { id: string; ok: boolean; error?: string }[] = [];
+      for (const id of input.ids) {
+        try {
+          results.push(input.action === "confirm" ? await confirmOne(id) : await skipOne(id));
+        } catch (e: any) {
+          results.push({ id, ok: false, error: String(e?.message || e) });
+        }
+      }
+      return { results };
+    }),
+
+  /** 批次：對多筆一次立即送（逐筆走完整 gate＋測試重導；序列化並小幅節流，避免 LINE rate limit） */
+  sendNowBatch: adminProcedure
+    .input(z.object({ ids: z.array(z.string().uuid()).min(1).max(200) }))
+    .mutation(async ({ input }) => {
+      const results: { id: string; ok: boolean; outcome?: string; error?: string }[] = [];
+      for (const id of input.ids) {
+        try {
+          const r = await runOutreach([id]);
+          if (r.sent) results.push({ id, ok: true, outcome: "sent" });
+          else if (r.suppressed) results.push({ id, ok: true, outcome: "suppressed" });
+          else if (r.skipped) results.push({ id, ok: false, outcome: "skipped", error: "狀態非 pending/confirmed，未送" });
+          else if (r.failed) results.push({ id, ok: false, outcome: "failed", error: r.errors[0]?.error || "發送失敗" });
+          else results.push({ id, ok: false, error: "查無此排程" });
+        } catch (e: any) {
+          results.push({ id, ok: false, error: String(e?.message || e) });
+        }
+        await new Promise((res) => setTimeout(res, 120)); // 節流
+      }
+      return { results };
+    }),
+
+  /** 單筆預覽：用實際變數渲染後只送到測試對象（test_redirect_uid）；永不送室友、不改狀態、不經派送 */
+  previewScheduleItem: adminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input }) => {
+      if (!isSupabaseConfigured())
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "SUPABASE_DB_URL 未設定" });
+      const redirect =
+        (
+          await sbQuery<{ u: string | null }>(
+            `select nullif(trim(test_redirect_uid),'') as u from outreach.settings where id=1`,
+          )
+        )[0]?.u || null;
+      if (!redirect)
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "請先到『篩選設定』填入測試 LINE 對象後再預覽；預覽只會送到測試對象、不會送給室友。",
+        });
+      const rows = await sbQuery<ScheduleRow & { card_template: any }>(
+        `select s.id, s.tenant_uid, s.tenant_name, s.room, s.property_name, s.contract_no,
+                to_char(s.contract_end_date,'YYYY-MM-DD') as contract_end_date,
+                s.rule_key, to_char(s.scheduled_date,'YYYY-MM-DD') as scheduled_date,
+                s.status, s.manually_edited, s.suppressed_reason, s.sent_at, r.card_template
+           from outreach.schedule s join outreach.rule r on r.key = s.rule_key
+          where s.id = $1`,
+        [input.id],
+      );
+      if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "查無此排程" });
+      const row = rows[0];
+      const msg = toFlexMessage(
+        renderTemplate(row.card_template, computeVars(row)),
+        "【預覽】" + (RULE_ALT_TEXT[row.rule_key] || "一方生活通知"),
+      );
+      const push = await pushLineDirect(redirect, msg);
+      if (!push.success)
+        throw new TRPCError({ code: "BAD_REQUEST", message: push.error || "預覽發送失敗" });
+      return { ok: true, redirectedTo: redirect };
+    }),
+
+  /** 發送成效統計：每月各狀態數量 + 失敗比例與示警（以既有欄位彙總，不另建表） */
+  getOutreachStats: adminProcedure
+    .input(z.object({ months: z.number().int().min(1).max(24).optional() }).optional())
+    .query(async ({ input }) => {
+      if (!isSupabaseConfigured()) return { buckets: [], threshold: 0.2 };
+      const months = input?.months ?? 6;
+      const rows = await sbQuery<{
+        month: string;
+        sent: number;
+        suppressed: number;
+        skipped: number;
+        pending: number;
+        confirmed: number;
+        failed: number;
+      }>(
+        `select to_char(date_trunc('month', coalesce(sent_at, last_attempt_at, updated_at)),'YYYY-MM') as month,
+                count(*) filter (where status='sent')::int as sent,
+                count(*) filter (where status='suppressed')::int as suppressed,
+                count(*) filter (where status='skipped')::int as skipped,
+                count(*) filter (where status='pending')::int as pending,
+                count(*) filter (where status='confirmed')::int as confirmed,
+                count(*) filter (where status<>'sent' and attempt_count>0 and last_error is not null)::int as failed
+           from outreach.schedule
+          where (status in ('sent','suppressed','skipped') or attempt_count > 0)
+            and coalesce(sent_at, last_attempt_at, updated_at) >= (date_trunc('month', current_date) - make_interval(months => $1))
+          group by 1
+          order by 1`,
+        [months - 1],
+      );
+      const threshold = 0.2;
+      const buckets = rows.map((r) => {
+        const denom = r.sent + r.failed;
+        const ratio = denom > 0 ? r.failed / denom : 0;
+        return { ...r, ratio: Math.round(ratio * 1000) / 1000, warn: ratio > threshold };
+      });
+      return { buckets, threshold };
+    }),
+
   /** 手動重算排程（改了規則/篩選後用） */
   recomputeNow: adminProcedure.mutation(async () => {
     if (!isSupabaseConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "SUPABASE_DB_URL 未設定" });
@@ -394,7 +557,7 @@ export const outreachRouter = router({
   listRules: adminProcedure.query(async () => {
     if (!isSupabaseConfigured()) return [];
     return await sbQuery(
-      `select key, label, trigger_basis, offset_days, enabled, card_template, sort_order
+      `select key, label, trigger_basis, offset_days, enabled, card_template, sort_order, auto_confirm
          from outreach.rule order by sort_order, key`,
     );
   }),
@@ -407,6 +570,7 @@ export const outreachRouter = router({
         label: z.string().optional(),
         offsetDays: z.number().int().optional(),
         enabled: z.boolean().optional(),
+        autoConfirm: z.boolean().optional(),
         cardTemplate: z.any().optional(),
       }),
     )
@@ -424,6 +588,10 @@ export const outreachRouter = router({
       if (input.enabled !== undefined) {
         params.push(input.enabled);
         sets.push(`enabled=$${params.length}`);
+      }
+      if (input.autoConfirm !== undefined) {
+        params.push(input.autoConfirm);
+        sets.push(`auto_confirm=$${params.length}`);
       }
       if (input.cardTemplate !== undefined) {
         if (typeof input.cardTemplate !== "object" || input.cardTemplate === null)
