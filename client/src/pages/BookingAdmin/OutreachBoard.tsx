@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
-  Loader2, Send, CalendarClock, SkipForward, Check, RotateCcw, RefreshCw, Save, AlertTriangle,
+  Loader2, Send, CalendarClock, SkipForward, Check, RotateCcw, RefreshCw, Save, AlertTriangle, Copy, Sparkles,
 } from "lucide-react";
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -27,7 +27,40 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   suppressed: { label: "已抑制", color: "bg-purple-100 text-purple-800" },
 };
 
-const TEMPLATE_VARS = ["{{tenant_name}}", "{{room}}", "{{contract_end_date}}", "{{days_until_expiry}}"];
+const TEMPLATE_VARS = ["{{tenant_name}}", "{{property_name}}", "{{room}}", "{{contract_end_date}}", "{{days_until_expiry}}"];
+
+// 給 AI 用的「卡片產生 Prompt」：使用者複製 → 貼到 ChatGPT/Claude → 描述需求 → 產出可貼進規則的 Flex JSON。
+const CARD_PROMPT = `你是「一方生活」週期詢問 LINE 卡片設計助手。請依我接下來的需求，產出「一個合法的 LINE Flex Message bubble JSON」（單一 bubble 物件即可，系統會自動包成 flex message 並處理 altText）。
+
+【輸出規則】
+- 只輸出一個 JSON 物件（type 為 "bubble"，可含 hero / body / footer）。不要加註解、不要 markdown 標記、不要任何多餘文字。
+- 必須是合法 JSON（能被 JSON.parse 解析）。
+- 需要每位室友不同的內容，請用下列「變數」以 {{變數名}} 形式寫入，系統發送時會自動替換成真實值：
+  - {{tenant_name}}      室友姓名
+  - {{property_name}}    入住案場簡稱
+  - {{room}}             房號 / 單位
+  - {{contract_end_date}} 合約到期日（YYYY/MM/DD）
+  - {{days_until_expiry}} 距離到期天數（整數）
+  入住問候通常用 {{tenant_name}}、{{property_name}}；到期提醒用 {{contract_end_date}}、{{days_until_expiry}}。
+
+【品牌視覺風格（請沿用）】
+- bubble size: "mega"
+- 顏色：主按鈕紫 #534AB7；續約綠 #0F6E56；提醒橘 #C8843C；急迫紅 #993C1D
+- 標題 weight:"bold" size:"md" color:"#222222"；副標 size:"sm" color:"#888888"
+- 分隔線 separator color:"#EEEEEE"
+- 重點提示框：box backgroundColor:"#FAEEDA" cornerRadius:"8px" paddingAll:"10px"，內文字 color:"#633806" size:"xs"
+- 條列：baseline box ＋ emoji(flex:0) ＋ 文字(wrap:true,color:"#333333",size:"sm")
+- body paddingAll:"20px" layout:"vertical" spacing:"md"
+- footer 按鈕 height:"sm"；主要動作 primary(#534AB7)、次要 secondary
+- 按鈕 action 可用：
+  - 開連結/LIFF：{"type":"uri","label":"...","uri":"https://..."}
+  - 送出訊息（點了由室友送出一句話，小幫手會在官方帳號收到）：{"type":"message","label":"...","text":"..."}
+
+【風格範例（供參考，結構照這個走）】
+{"type":"bubble","size":"mega","body":{"type":"box","layout":"vertical","spacing":"md","paddingAll":"20px","contents":[{"type":"text","text":"住得還習慣嗎？😊","weight":"bold","size":"md","color":"#222222","wrap":true},{"type":"text","text":"{{tenant_name}} 您好，您入住 {{property_name}} 已經兩週囉～","size":"sm","color":"#888888","wrap":true,"margin":"xs"},{"type":"separator","margin":"md","color":"#EEEEEE"},{"type":"box","layout":"vertical","backgroundColor":"#FAEEDA","cornerRadius":"8px","paddingAll":"10px","margin":"md","contents":[{"type":"text","text":"🔔 點下方按鈕讓我們知道你的近況。","size":"xs","color":"#633806","wrap":true}]}]},"footer":{"type":"box","layout":"vertical","spacing":"sm","paddingAll":"16px","contents":[{"type":"button","style":"primary","color":"#534AB7","height":"sm","action":{"type":"message","label":"我住得很習慣，謝謝","text":"我住得很習慣，謝謝 😊"}}]},"styles":{"footer":{"separator":false}}}
+
+【我的需求】
+（在這裡描述：卡片主題、文案重點、要哪些按鈕、按鈕連到哪…）`;
 
 // ── 排程看板 ──────────────────────────────────────────────────────────────────
 function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
@@ -265,6 +298,32 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
   );
 }
 
+// ── 卡片產生 Prompt ────────────────────────────────────────────────────────────
+function PromptCard() {
+  const copy = () => {
+    navigator.clipboard.writeText(CARD_PROMPT).then(
+      () => toast.success("Prompt 已複製，貼到 ChatGPT / Claude 並描述你要的卡片即可"),
+      () => toast.error("複製失敗，請手動選取全部"),
+    );
+  };
+  return (
+    <Card className="bg-muted/40 border-dashed">
+      <CardContent className="py-4 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold flex items-center gap-1.5">
+            <Sparkles className="h-4 w-4 text-primary" /> 卡片產生 Prompt（給 AI 用）
+          </div>
+          <Button size="sm" variant="outline" onClick={copy}><Copy className="h-3.5 w-3.5 mr-1" /> 複製 Prompt</Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          複製這段 → 貼到 ChatGPT / Claude → 描述你要的卡片 → 把它產出的 Flex JSON 貼進下方規則的「卡片 JSON」（或「測試發送」預覽）即可。
+        </p>
+        <Textarea readOnly value={CARD_PROMPT} className="font-mono text-[11px] min-h-[140px]" onFocus={(e) => e.currentTarget.select()} />
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── 規則 Tab ───────────────────────────────────────────────────────────────────
 function RulesTab() {
   const rulesQuery = trpc.outreach.listRules.useQuery(undefined, { refetchOnWindowFocus: false });
@@ -274,6 +333,7 @@ function RulesTab() {
   }
   return (
     <div className="space-y-3">
+      <PromptCard />
       <p className="text-xs text-muted-foreground">
         改了天數或卡片後，記得到「排程看板」按「重算排程」讓新設定生效（既有排程不會被覆蓋）。
       </p>

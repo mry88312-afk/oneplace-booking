@@ -23,6 +23,7 @@ type ScheduleRow = {
   tenant_uid: string;
   tenant_name: string | null;
   room: string | null;
+  property_name: string | null;
   contract_no: string | null;
   contract_end_date: string | null; // 'YYYY-MM-DD'
   rule_key: string;
@@ -51,6 +52,7 @@ function computeVars(row: ScheduleRow): Record<string, string> {
   const vars: Record<string, string> = {
     tenant_name: row.tenant_name ?? "",
     room: row.room ?? "",
+    property_name: row.property_name ?? "",
     contract_end_date: row.contract_end_date ?? "",
     days_until_expiry: "",
   };
@@ -103,7 +105,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
   if (!Array.isArray(scheduleIds) || scheduleIds.length === 0) return result;
 
   const rows = await sbQuery<ScheduleRow & { card_template: any }>(
-    `select s.id, s.tenant_uid, s.tenant_name, s.room, s.contract_no,
+    `select s.id, s.tenant_uid, s.tenant_name, s.room, s.property_name, s.contract_no,
             to_char(s.contract_end_date, 'YYYY-MM-DD') as contract_end_date,
             s.rule_key, to_char(s.scheduled_date, 'YYYY-MM-DD') as scheduled_date,
             s.status, s.manually_edited, s.suppressed_reason, s.sent_at,
