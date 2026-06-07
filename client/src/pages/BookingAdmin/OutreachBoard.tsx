@@ -369,6 +369,55 @@ function SettingsTab() {
   );
 }
 
+// ── 測試發送 Tab ───────────────────────────────────────────────────────────────
+function TestSendTab() {
+  const [uid, setUid] = useState("");
+  const [altText, setAltText] = useState("");
+  const [cardText, setCardText] = useState("");
+  const send = trpc.outreach.sendTestCard.useMutation({
+    onSuccess: () => toast.success("已送出，請到該 LINE 查看卡片"),
+    onError: (e) => toast.error(e.message),
+  });
+  const doSend = () => {
+    if (!uid.trim()) { toast.error("請填 LINE uid"); return; }
+    let card: any;
+    try { card = JSON.parse(cardText); } catch { toast.error("卡片 JSON 格式錯誤，請檢查"); return; }
+    send.mutate({ uid: uid.trim(), card, altText: altText.trim() || undefined });
+  };
+  return (
+    <div className="space-y-3 max-w-2xl">
+      <p className="text-xs text-muted-foreground">
+        貼上 LINE Flex JSON（可貼整個 message 物件，或只貼 bubble / carousel，系統會自動包裝），
+        填入測試 uid，按發送即可在該 LINE 預覽卡片實際樣子。
+      </p>
+      <div>
+        <Label className="text-xs">測試 LINE uid</Label>
+        <Input value={uid} onChange={(e) => setUid(e.target.value)} className="mt-1" placeholder="Uxxxxxxxx..." autoComplete="off" />
+      </div>
+      <div>
+        <Label className="text-xs">altText（通知列文字，選填）</Label>
+        <Input value={altText} onChange={(e) => setAltText(e.target.value)} className="mt-1" placeholder="一方生活｜合約到期詢問" autoComplete="off" />
+      </div>
+      <div>
+        <Label className="text-xs">卡片 JSON</Label>
+        <Textarea
+          value={cardText}
+          onChange={(e) => setCardText(e.target.value)}
+          className="mt-1 font-mono text-xs min-h-[260px]"
+          spellCheck={false}
+          placeholder='{ "type": "bubble", ... }'
+        />
+      </div>
+      <div className="flex justify-end">
+        <Button onClick={doSend} disabled={send.isPending}>
+          {send.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Send className="h-4 w-4 mr-1" />}
+          發送測試卡片
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── 主元件 ─────────────────────────────────────────────────────────────────────
 export function OutreachBoard() {
   const health = trpc.outreach.health.useQuery(undefined, { refetchOnWindowFocus: false });
@@ -389,6 +438,7 @@ export function OutreachBoard() {
           <TabsTrigger value="schedule">排程看板</TabsTrigger>
           <TabsTrigger value="rules">規則 / 卡片</TabsTrigger>
           <TabsTrigger value="settings">篩選 / 設定</TabsTrigger>
+          <TabsTrigger value="test">測試發送</TabsTrigger>
         </TabsList>
         <TabsContent value="schedule" className="mt-4">
           <ScheduleTab ruleLabels={ruleLabels} />
@@ -398,6 +448,9 @@ export function OutreachBoard() {
         </TabsContent>
         <TabsContent value="settings" className="mt-4">
           <SettingsTab />
+        </TabsContent>
+        <TabsContent value="test" className="mt-4">
+          <TestSendTab />
         </TabsContent>
       </Tabs>
     </div>

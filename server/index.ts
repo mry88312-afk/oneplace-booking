@@ -77,6 +77,29 @@ async function startServer() {
     }
   });
 
+  // 測試發送：把貼上的卡片推到指定 uid（從 Zeabur 發送，可預覽卡片實際樣子）。需共享密鑰。
+  app.post("/api/outreach/test-send", async (req, res) => {
+    const expected = process.env.OUTREACH_RUN_SECRET;
+    if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
+    const got = String(req.header("x-outreach-secret") || "");
+    const a = Buffer.from(got);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const { uid, card, altText, vars } = req.body || {};
+    if (!uid || !card) return res.status(400).json({ error: "uid and card required" });
+    try {
+      const { pushTestCard } = await import("./routers/property/outreachHandlers");
+      const r = await pushTestCard(uid, card, altText, vars);
+      console.log(`[outreach] test-send to ${String(uid).slice(0, 8)}… → ${JSON.stringify(r)}`);
+      return res.status(r.success ? 200 : 400).json(r);
+    } catch (err: any) {
+      console.error("[outreach] test-send error:", err?.message || err);
+      return res.status(500).json({ error: err?.message || "error" });
+    }
+  });
+
   // 靜態檔案（前端 build 後的 SPA）
   if (process.env.NODE_ENV === "production") {
     const clientDist = path.resolve(__dirname, "public");

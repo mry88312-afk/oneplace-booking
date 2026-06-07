@@ -148,6 +148,23 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
   return result;
 }
 
+/**
+ * 測試發送：把任意卡片（LINE message 物件、或 bubble/carousel）推到指定 uid，供後台預覽。
+ * 從 Zeabur 發送（可穩定連到 LINE）。可帶 vars 做 {{變數}} 替換。
+ */
+export async function pushTestCard(
+  uid: string,
+  card: any,
+  altText?: string,
+  vars?: Record<string, string>,
+): Promise<{ success: boolean; error?: string }> {
+  let msg = vars && Object.keys(vars).length ? renderTemplate(card, vars) : card;
+  if (msg && (msg.type === "bubble" || msg.type === "carousel")) {
+    msg = { type: "flex", altText: altText || "測試卡片", contents: msg };
+  }
+  return await pushLineDirect(uid, msg);
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // tRPC 後台 API（皆需 x-admin-password）
 // ──────────────────────────────────────────────────────────────────────────
@@ -161,6 +178,22 @@ const SCHEDULE_COLS =
 export const outreachRouter = router({
   /** 後台是否已接上 Supabase（給前端顯示提示用） */
   health: adminProcedure.query(() => ({ supabaseConfigured: isSupabaseConfigured() })),
+
+  /** 測試發送：把貼上的卡片 JSON 推到指定 uid（從 Zeabur 發送），供預覽卡片實際樣子 */
+  sendTestCard: adminProcedure
+    .input(
+      z.object({
+        uid: z.string().min(1),
+        card: z.any(),
+        altText: z.string().optional(),
+        vars: z.record(z.string(), z.string()).optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const r = await pushTestCard(input.uid, input.card, input.altText, input.vars);
+      if (!r.success) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "LINE push 失敗" });
+      return { ok: true };
+    }),
 
   /** 列出排程（預設未來；可帶 status/from/to 過濾） */
   listSchedule: adminProcedure
