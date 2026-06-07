@@ -372,11 +372,12 @@ export const outreachRouter = router({
     .mutation(async ({ input }) => {
       const sets: string[] = [];
       const params: any[] = [];
-      if (input.includeOwnershipRegions !== undefined) {
+      // 防呆：空陣列視為「不變更」，避免表單在未載入時誤把篩選集合清空（清空 include 會導致 recompute 算不出任何排程）
+      if (input.includeOwnershipRegions !== undefined && input.includeOwnershipRegions.length > 0) {
         params.push(input.includeOwnershipRegions);
         sets.push(`include_ownership_regions=$${params.length}`);
       }
-      if (input.excludeHqCategories !== undefined) {
+      if (input.excludeHqCategories !== undefined && input.excludeHqCategories.length > 0) {
         params.push(input.excludeHqCategories);
         sets.push(`exclude_hq_categories=$${params.length}`);
       }
