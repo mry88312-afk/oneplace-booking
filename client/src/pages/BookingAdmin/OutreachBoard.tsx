@@ -63,6 +63,39 @@ const CARD_PROMPT = `你是「一方生活」週期詢問 LINE 卡片設計助�
 【我的需求】
 （在這裡描述：卡片主題、文案重點、要哪些按鈕、按鈕連到哪…）`;
 
+// 給未來 AI 的「新增規則」說明：使用者複製 → 貼給 AI → AI 依此規格新增規則 + 可編輯卡片。
+const RULE_ADD_PROMPT = `你是「一方生活」週期詢問系統的工程助手。我要新增一條週期詢問規則（例如到期前 40 天、入住後 30 天…）。請依下列規格做：
+
+【規則存在哪】
+Supabase 專案 dwoahbduwzfzqmwpvadj 的 outreach.rule 表，每條規則欄位：
+- key：代號，唯一。請用「基準+天數」自動命名 —— 到期日基準 → expiry_d{天數}（到期前 N 天）；開始日基準 → onboarding_d{天數}（入住後 N 天）。例：到期前 40 天 = expiry_d40；入住後 30 天 = onboarding_d30。不可與現有重複。
+- label：給人看的名稱（例「續約提醒 −40」）。
+- trigger_basis：contract_start（合約開始日）或 contract_end（合約到期日）。
+- offset_days：整數。開始日基準用正數（入住 +N）；到期日基準用負數（到期 −N，例 −40）。
+- enabled：true。
+- auto_confirm：預設 false（要免人工確認自動發才設 true）。
+- card_template：jsonb，一個 LINE Flex bubble（用本頁「卡片產生 Prompt」產生）。
+- sort_order：整數排序。
+
+【排程引擎】
+outreach.recompute_schedule() 會自動掃過所有 enabled 規則產生排程，新增規則「不必改引擎」。新增後到後台「排程看板」按「重算排程」即生效（既有排程不會被覆蓋）。outreach.schedule.rule_key 無限制，可用任意新 key。
+
+【互動回饋按鈕（選用）】
+若卡片要「住得很舒服 / 請小幫手協助」回饋按鈕，footer 放兩顆 uri 按鈕：
+- 住得很舒服：uri 為 https://oneplace-booking.zeabur.app/f/{{schedule_id}}?r=ok
+- 請小幫手協助：uri 為 https://oneplace-booking.zeabur.app/f/{{schedule_id}}?r=help
+{{schedule_id}} 系統發送時會自動代入；回饋會寫進 Ragic「回饋單」並依設定通知，且同一張卡只認第一次點擊。
+
+【篩選（重要）】
+目前篩選是「全域」：outreach.settings 的 include_ownership_regions（案件歸屬）與 exclude_hq_categories（總公司內分類），套用到所有規則。
+※「每條規則各自不同篩選」尚未實作。若要這個，需把篩選搬到 outreach.rule（每條一份、留空沿用全域）並改 recompute_schedule() —— 屬要另外做的功能，請先跟我確認再動。
+
+【新增/刪除規則的後台按鈕】
+目前後台只能「編輯」既有規則，沒有新增/刪除按鈕（之後要做）。在做出來之前，新增規則請直接在 outreach.rule 插一列。
+
+【我的需求】
+（在這裡描述：到期前幾天 / 入住後幾天、規則名稱、卡片文案重點、要不要回饋按鈕、要不要自動確認、篩選有沒有要跟別人不一樣…）`;
+
 // ── 排程看板 ──────────────────────────────────────────────────────────────────
 const RULE_OPTIONS = [
   { key: "all", label: "全部卡別" },
@@ -500,11 +533,11 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
   );
 }
 
-// ── 卡片產生 Prompt ────────────────────────────────────────────────────────────
-function PromptCard() {
+// ── 複製用 Prompt 卡（卡片產生 / 新增規則） ─────────────────────────────────────
+function PromptCard({ title, desc, text }: { title: string; desc: string; text: string }) {
   const copy = () => {
-    navigator.clipboard.writeText(CARD_PROMPT).then(
-      () => toast.success("Prompt 已複製，貼到 ChatGPT / Claude 並描述你要的卡片即可"),
+    navigator.clipboard.writeText(text).then(
+      () => toast.success("Prompt 已複製，貼到 ChatGPT / Claude 即可"),
       () => toast.error("複製失敗，請手動選取全部"),
     );
   };
@@ -513,14 +546,64 @@ function PromptCard() {
       <CardContent className="py-4 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="text-sm font-semibold flex items-center gap-1.5">
-            <Sparkles className="h-4 w-4 text-primary" /> 卡片產生 Prompt（給 AI 用）
+            <Sparkles className="h-4 w-4 text-primary" /> {title}
           </div>
           <Button size="sm" variant="outline" onClick={copy}><Copy className="h-3.5 w-3.5 mr-1" /> 複製 Prompt</Button>
         </div>
-        <p className="text-xs text-muted-foreground">
-          複製這段 → 貼到 ChatGPT / Claude → 描述你要的卡片 → 把它產出的 Flex JSON 貼進下方規則的「卡片 JSON」（或「測試發送」預覽）即可。
-        </p>
-        <Textarea readOnly value={CARD_PROMPT} className="font-mono text-[11px] min-h-[140px]" onFocus={(e) => e.currentTarget.select()} />
+        <p className="text-xs text-muted-foreground">{desc}</p>
+        <Textarea readOnly value={text} className="font-mono text-[11px] min-h-[140px]" onFocus={(e) => e.currentTarget.select()} />
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── 目前設定總覽（讓同事一眼看懂：每條規則的篩選 + 用哪張卡） ───────────────────
+function RulesOverview({ rules }: { rules: any[] }) {
+  const settingsQuery = trpc.outreach.getSettings.useQuery(undefined, { refetchOnWindowFocus: false });
+  const s: any = settingsQuery.data;
+  const inc = (s?.include_ownership_regions || []).join("、") || "—";
+  const exc = (s?.exclude_hq_categories || []).join("、") || "—";
+  const cardTitle = (r: any) => r?.card_template?.body?.contents?.[0]?.text || "（已設定卡片）";
+  return (
+    <Card>
+      <CardContent className="py-4 space-y-3">
+        <div className="text-sm font-semibold">📋 目前設定總覽</div>
+        <div className="text-xs text-muted-foreground">
+          全域篩選（套用到所有規則）：案件歸屬 ∈ <b>{inc}</b>；總公司內分類 排除 <b>{exc}</b>。
+          <span className="block mt-0.5">（「每條規則各自不同篩選」是之後要做的功能；目前所有規則都用這組全域篩選。）</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="text-left text-muted-foreground border-b">
+                <th className="py-1 pr-3">名稱</th>
+                <th className="py-1 pr-3">基準</th>
+                <th className="py-1 pr-3">天數</th>
+                <th className="py-1 pr-3">卡片</th>
+                <th className="py-1 pr-3">篩選</th>
+                <th className="py-1 pr-3">狀態</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((r: any) => (
+                <tr key={r.key} className="border-b last:border-0 align-top">
+                  <td className="py-1.5 pr-3 font-medium">
+                    {r.label}
+                    <div className="text-[10px] text-muted-foreground font-mono">{r.key}</div>
+                  </td>
+                  <td className="py-1.5 pr-3">{r.trigger_basis === "contract_start" ? "開始日" : "到期日"}</td>
+                  <td className="py-1.5 pr-3">{r.offset_days > 0 ? `+${r.offset_days}` : r.offset_days}</td>
+                  <td className="py-1.5 pr-3 max-w-[180px] truncate">{cardTitle(r)}</td>
+                  <td className="py-1.5 pr-3">全域</td>
+                  <td className="py-1.5 pr-3">
+                    {r.enabled ? "啟用" : "停用"}
+                    {r.auto_confirm ? "・自動確認" : ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   );
@@ -535,7 +618,17 @@ function RulesTab() {
   }
   return (
     <div className="space-y-3">
-      <PromptCard />
+      <RulesOverview rules={rules} />
+      <PromptCard
+        title="卡片產生 Prompt（給 AI 用）"
+        desc="複製這段 → 貼到 ChatGPT / Claude → 描述你要的卡片 → 把它產出的 Flex JSON 貼進下方規則的「卡片 JSON」（或「測試發送」預覽）即可。"
+        text={CARD_PROMPT}
+      />
+      <PromptCard
+        title="新增規則 Prompt（給 AI 用）"
+        desc="未來想新增規則（例如到期前 40 天、入住後 30 天）時，複製這段給 AI，它就知道完整規格怎麼幫你加規則 + 卡片。"
+        text={RULE_ADD_PROMPT}
+      />
       <p className="text-xs text-muted-foreground">
         改了天數或卡片後，記得到「排程看板」按「重算排程」讓新設定生效（既有排程不會被覆蓋）。
       </p>
