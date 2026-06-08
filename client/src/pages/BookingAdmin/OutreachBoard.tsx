@@ -555,6 +555,10 @@ function SettingsTab() {
   const [runSecret, setRunSecret] = useState("");
   const [secretSet, setSecretSet] = useState(false);
   const [testRedirect, setTestRedirect] = useState("");
+  const [notifyUids, setNotifyUids] = useState("");
+  const [surveyTitle, setSurveyTitle] = useState("");
+  const [surveyItems, setSurveyItems] = useState("");
+  const [surveyNote, setSurveyNote] = useState("");
 
   useEffect(() => {
     const d: any = settingsQuery.data;
@@ -564,6 +568,11 @@ function SettingsTab() {
     setRunUrl(d.run_endpoint_url || "");
     setSecretSet(!!d.run_secret_set);
     setTestRedirect(d.test_redirect_uid || "");
+    setNotifyUids(d.notify_uids || "");
+    const fs = d.feedback_survey || {};
+    setSurveyTitle(fs.title || "");
+    setSurveyItems((fs.items || []).join("\n"));
+    setSurveyNote(fs.note_label || "");
   }, [settingsQuery.data]);
 
   const update = trpc.outreach.updateSettings.useMutation({
@@ -572,6 +581,14 @@ function SettingsTab() {
   });
 
   const parseList = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+
+  const saveFeedback = () => {
+    const items = surveyItems.split("\n").map((x) => x.trim()).filter(Boolean);
+    update.mutate({
+      notifyUids,
+      feedbackSurvey: { title: surveyTitle.trim(), items, note_label: surveyNote.trim() },
+    });
+  };
 
   return (
     <div className="space-y-4 max-w-xl">
@@ -589,6 +606,38 @@ function SettingsTab() {
             </Button>
             <Button size="sm" onClick={() => update.mutate({ testRedirectUid: testRedirect.trim() })} disabled={update.isPending || !testRedirect.trim()}>
               開啟 / 更新
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="py-4 space-y-3">
+          <Label className="text-sm font-semibold">💬 入住卡互動回饋</Label>
+          <p className="text-xs text-muted-foreground">
+            入住卡兩顆按鈕（住得很舒服 😊／有點小狀況，請小幫手協助 🛠️）會開啟連結到本系統，全程不經 MANUS。「請小幫手協助」會顯示下方問卷，送出後寫入 Ragic 回饋單並通知下列同事。
+          </p>
+          <div>
+            <Label className="text-xs">通知對象 LINE UID（逗號分隔，可多人）</Label>
+            <Input value={notifyUids} onChange={(e) => setNotifyUids(e.target.value)} className="mt-1" placeholder="Uxxxx..., Uyyyy..." autoComplete="off" />
+            <p className="text-[11px] text-muted-foreground mt-1">收通知的人需先加官方帳號為好友，否則發不出去；留空＝不通知。</p>
+          </div>
+          <div>
+            <Label className="text-xs">問卷標題</Label>
+            <Input value={surveyTitle} onChange={(e) => setSurveyTitle(e.target.value)} className="mt-1" placeholder="哪個部分讓你比較不滿意？（可複選）" />
+          </div>
+          <div>
+            <Label className="text-xs">不滿意項目（一行一個）</Label>
+            <Textarea value={surveyItems} onChange={(e) => setSurveyItems(e.target.value)} className="mt-1 min-h-[140px] text-sm" spellCheck={false} placeholder={"房間設備\n清潔／環境\n維修太慢或沒處理\n噪音／鄰居\n費用／帳務\n管理或服務態度\n其他"} />
+          </div>
+          <div>
+            <Label className="text-xs">留言提示文字</Label>
+            <Input value={surveyNote} onChange={(e) => setSurveyNote(e.target.value)} className="mt-1" placeholder="想多說一點（選填）" />
+          </div>
+          <div className="flex justify-end">
+            <Button size="sm" onClick={saveFeedback} disabled={update.isPending}>
+              {update.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1" />}
+              儲存回饋設定
             </Button>
           </div>
         </CardContent>

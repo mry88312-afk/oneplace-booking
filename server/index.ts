@@ -100,6 +100,47 @@ async function startServer() {
     }
   });
 
+  // 週期詢問互動回饋：入住卡按鈕「開啟連結」打到這裡（公開頁、不經 LINE webhook / MANUS）。
+  // GET /f/:id?r=ok   → 記「住得舒服」+ 謝謝頁
+  // GET /f/:id?r=help → 顯示後台可編輯的小問卷
+  // POST /f/:id        → 記「需要協助」+ 通知後台名單 + 謝謝頁
+  // 註：須在 SPA fallback 之前註冊，否則會被 index.html 接走。
+  app.get("/f/:id", async (req, res) => {
+    try {
+      const fb = await import("./routers/property/outreachFeedbackHandlers");
+      const row = await fb.loadFeedbackRow(String(req.params.id));
+      if (!row) return res.type("html").send(fb.thankYouHtml("generic"));
+      if (String(req.query.r || "") === "ok") {
+        await fb.recordFeedback({ row, type: "satisfied" });
+        console.log(`[feedback] satisfied for schedule ${row.id}`);
+        return res.type("html").send(fb.thankYouHtml("satisfied"));
+      }
+      const { survey } = await fb.getFeedbackSettings();
+      return res.type("html").send(fb.surveyHtml(row.id, survey));
+    } catch (err: any) {
+      console.error("[feedback] GET error:", err?.message || err);
+      return res.type("html").send("<p style='font-family:sans-serif;padding:24px'>謝謝你的回覆。</p>");
+    }
+  });
+
+  app.post("/f/:id", async (req, res) => {
+    try {
+      const fb = await import("./routers/property/outreachFeedbackHandlers");
+      const row = await fb.loadFeedbackRow(String(req.params.id));
+      if (!row) return res.type("html").send(fb.thankYouHtml("generic"));
+      const raw = req.body?.items;
+      const items: string[] = Array.isArray(raw) ? raw.map(String) : raw ? [String(raw)] : [];
+      const note = String(req.body?.note || "").slice(0, 2000);
+      await fb.recordFeedback({ row, type: "help", items, note });
+      await fb.notifyHelp(row, items, note);
+      console.log(`[feedback] help for schedule ${row.id}: ${items.join("、")}`);
+      return res.type("html").send(fb.thankYouHtml("help"));
+    } catch (err: any) {
+      console.error("[feedback] POST error:", err?.message || err);
+      return res.type("html").send("<p style='font-family:sans-serif;padding:24px'>已收到，謝謝你的回覆。</p>");
+    }
+  });
+
   // 靜態檔案（前端 build 後的 SPA）
   if (process.env.NODE_ENV === "production") {
     const clientDist = path.resolve(__dirname, "public");

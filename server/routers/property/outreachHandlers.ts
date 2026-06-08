@@ -50,6 +50,7 @@ export function renderTemplate(template: any, vars: Record<string, string>): any
 /** 由 schedule 列計算卡片變數。days_until_expiry 於發送當下重算（即使延後送也準確）。 */
 function computeVars(row: ScheduleRow): Record<string, string> {
   const vars: Record<string, string> = {
+    schedule_id: row.id ?? "",
     tenant_name: row.tenant_name ?? "",
     room: row.room ?? "",
     property_name: row.property_name ?? "",
@@ -611,7 +612,7 @@ export const outreachRouter = router({
     const rows = await sbQuery(
       `select include_ownership_regions, exclude_hq_categories, run_endpoint_url,
               (run_secret is not null and run_secret <> '') as run_secret_set,
-              test_redirect_uid
+              test_redirect_uid, feedback_survey, notify_uids
          from outreach.settings where id=1`,
     );
     return rows[0] ?? null;
@@ -626,6 +627,8 @@ export const outreachRouter = router({
         runEndpointUrl: z.string().optional(),
         runSecret: z.string().optional(),
         testRedirectUid: z.string().optional(),
+        notifyUids: z.string().optional(),
+        feedbackSurvey: z.any().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -653,6 +656,18 @@ export const outreachRouter = router({
       if (input.runSecret !== undefined && input.runSecret !== "") {
         params.push(input.runSecret);
         sets.push(`run_secret=$${params.length}`);
+      }
+      // 通知名單：允許空字串（＝清空名單，不通知任何人）
+      if (input.notifyUids !== undefined) {
+        params.push(input.notifyUids.trim());
+        sets.push(`notify_uids=$${params.length}`);
+      }
+      // 問卷內容：必須是 JSON 物件
+      if (input.feedbackSurvey !== undefined) {
+        if (typeof input.feedbackSurvey !== "object" || input.feedbackSurvey === null)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "feedback_survey 必須是 JSON 物件" });
+        params.push(JSON.stringify(input.feedbackSurvey));
+        sets.push(`feedback_survey=$${params.length}::jsonb`);
       }
       if (!sets.length) return { ok: true };
       sets.push(`updated_at=now()`);
