@@ -34,6 +34,7 @@ export type FeedbackRow = {
   contract_no: string | null;
   scheduled_date: string | null;
   rule_label: string | null;
+  feedback_at: string | null;
 };
 
 /** 依連結帶的 schedule id 查出該筆資料；查無回 null（頁面顯示通用謝謝、不寫入）。 */
@@ -42,13 +43,34 @@ export async function loadFeedbackRow(scheduleId: string): Promise<FeedbackRow |
   if (!/^[0-9a-f-]{36}$/i.test(scheduleId)) return null;
   const rows = await sbQuery<FeedbackRow>(
     `select s.id, s.tenant_uid, s.tenant_name, s.room, s.property_name, s.contract_no,
-            to_char(s.scheduled_date,'YYYY-MM-DD') as scheduled_date, r.label as rule_label
+            to_char(s.scheduled_date,'YYYY-MM-DD') as scheduled_date, r.label as rule_label,
+            s.feedback_at
        from outreach.schedule s
        left join outreach.rule r on r.key = s.rule_key
       where s.id = $1`,
     [scheduleId],
   );
   return rows[0] || null;
+}
+
+/** 原子認領：第一個請求把 feedback_at 設起來（回 true）；之後再點回 false（已回覆過、不重複寫、不重複通知）。 */
+export async function claimFeedback(scheduleId: string, type: "satisfied" | "help"): Promise<boolean> {
+  if (!isSupabaseConfigured()) return true;
+  const r = await sbQuery<{ id: string }>(
+    `update outreach.schedule set feedback_at=now(), feedback_type=$2, updated_at=now()
+      where id=$1 and feedback_at is null returning id`,
+    [scheduleId, type],
+  );
+  return r.length > 0;
+}
+
+/** 寫 Ragic 失敗時回滾認領，讓房客可重試（避免被永久鎖住）。 */
+export async function unclaimFeedback(scheduleId: string): Promise<void> {
+  try {
+    await sbQuery(`update outreach.schedule set feedback_at=null, updated_at=now() where id=$1`, [scheduleId]);
+  } catch {
+    /* best effort */
+  }
 }
 
 const DEFAULT_SURVEY = {
@@ -148,13 +170,15 @@ function page(inner: string): string {
 }
 
 /** 謝謝頁。 */
-export function thankYouHtml(kind: "satisfied" | "help" | "generic"): string {
+export function thankYouHtml(kind: "satisfied" | "help" | "generic" | "already"): string {
   const msg =
     kind === "help"
       ? "已收到，會盡快請小幫手與你聯繫 🙏"
       : kind === "satisfied"
         ? "謝謝你的回覆 😊"
-        : "謝謝你的回覆 🙏";
+        : kind === "already"
+          ? "你已經回覆過了，謝謝 🙏"
+          : "謝謝你的回覆 🙏";
   return page(`<div class="big">${msg}</div><p class="sub">可以關閉這個頁面了。</p>`);
 }
 

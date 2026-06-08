@@ -110,8 +110,16 @@ async function startServer() {
       const fb = await import("./routers/property/outreachFeedbackHandlers");
       const row = await fb.loadFeedbackRow(String(req.params.id));
       if (!row) return res.type("html").send(fb.thankYouHtml("generic"));
+      if (row.feedback_at) return res.type("html").send(fb.thankYouHtml("already")); // 已回覆過：不重複寫、不再顯示問卷
       if (String(req.query.r || "") === "ok") {
-        await fb.recordFeedback({ row, type: "satisfied" });
+        const claimed = await fb.claimFeedback(row.id, "satisfied");
+        if (!claimed) return res.type("html").send(fb.thankYouHtml("already"));
+        try {
+          await fb.recordFeedback({ row, type: "satisfied" });
+        } catch (e) {
+          await fb.unclaimFeedback(row.id); // 寫入失敗 → 解除鎖定，可重試
+          throw e;
+        }
         console.log(`[feedback] satisfied for schedule ${row.id}`);
         return res.type("html").send(fb.thankYouHtml("satisfied"));
       }
@@ -119,7 +127,7 @@ async function startServer() {
       return res.type("html").send(fb.surveyHtml(row.id, survey));
     } catch (err: any) {
       console.error("[feedback] GET error:", err?.message || err);
-      return res.type("html").send("<p style='font-family:sans-serif;padding:24px'>謝謝你的回覆。</p>");
+      return res.type("html").send("<p style='font-family:sans-serif;padding:24px'>系統忙碌，請稍後再試一次，謝謝。</p>");
     }
   });
 
@@ -128,16 +136,23 @@ async function startServer() {
       const fb = await import("./routers/property/outreachFeedbackHandlers");
       const row = await fb.loadFeedbackRow(String(req.params.id));
       if (!row) return res.type("html").send(fb.thankYouHtml("generic"));
+      const claimed = await fb.claimFeedback(row.id, "help");
+      if (!claimed) return res.type("html").send(fb.thankYouHtml("already")); // 已回覆過：不重複寫、不重複通知
       const raw = req.body?.items;
       const items: string[] = Array.isArray(raw) ? raw.map(String) : raw ? [String(raw)] : [];
       const note = String(req.body?.note || "").slice(0, 2000);
-      await fb.recordFeedback({ row, type: "help", items, note });
-      await fb.notifyHelp(row, items, note);
+      try {
+        await fb.recordFeedback({ row, type: "help", items, note });
+      } catch (e) {
+        await fb.unclaimFeedback(row.id); // 寫入失敗 → 解除鎖定，可重試
+        throw e;
+      }
+      await fb.notifyHelp(row, items, note); // 通知為盡力而為，失敗不回滾
       console.log(`[feedback] help for schedule ${row.id}: ${items.join("、")}`);
       return res.type("html").send(fb.thankYouHtml("help"));
     } catch (err: any) {
       console.error("[feedback] POST error:", err?.message || err);
-      return res.type("html").send("<p style='font-family:sans-serif;padding:24px'>已收到，謝謝你的回覆。</p>");
+      return res.type("html").send("<p style='font-family:sans-serif;padding:24px'>系統忙碌，請稍後再試一次，謝謝。</p>");
     }
   });
 
