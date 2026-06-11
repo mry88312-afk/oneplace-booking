@@ -33,7 +33,7 @@ const TEMPLATE_VARS = ["{{tenant_name}}", "{{property_name}}", "{{room}}", "{{co
 // 投遞 API 串接說明（給 Ragic / MANUS 等外部系統；放在 篩選/設定 分頁可複製）
 const ENQUEUE_PROMPT = `【一方生活｜統一發訊中樞——投遞 API 串接說明】
 
-任何系統要發 LINE 卡片給室友，請改打這支 API：訊息會進排程、看板可控管（可跳過/取消）、時間到自動發送。
+任何系統要發訊息給室友（純文字或圖文卡片），請改打這支 API：訊息會進排程、看板可控管（可跳過/取消）、時間到自動發送。
 
 端點：POST https://oneplace-booking.zeabur.app/api/outreach/enqueue
 Header：
@@ -42,14 +42,27 @@ Header：
 
 Body 欄位：
   dedupeKey  必填。去重碼：同一個 dedupeKey 只會排一次（重送安全）。建議格式 來源:用途:對象:日期
-  card       必填。整張 LINE 卡片 JSON（bubble 會自動包成 flex message）
-  altText    選填。通知列文字
+  text       純文字捷徑（最簡單）。要發「一般文字訊息」就帶這個字串，例 "您好，您的 6 月帳單已產生"
+  card       要發「圖文卡片」才用。整張 LINE 卡片 JSON（type:bubble，會自動包成 flex）。text 與 card 擇一必填
+  altText    選填。卡片的通知列文字（純文字訊息不需要）
   to         必填。{ "uid": "Uxxxx" } 或 { "phone": "0912345678" } 擇一；只給電話時發送前會自動查 LINE UID，查無會留在失敗清單、補綁後可重送
   immediate  選填。true = 立即發送：不等排程、打進來當下就發，回應會直接帶 sent/failed 結果。帶 immediate 時 sendAt 可省略
   sendAt     immediate 未帶時必填。發送時間（ISO 8601 含時區），例 "2026-06-15T10:00:00+08:00"；系統每 5 分鐘檢查、到點即送
   tag        必填。分類標籤（看板篩選用），例 "帳務通知"
 
-curl 範例：
+範例 A — 純文字（最常用、最簡單，只要帶 text）：
+curl -X POST https://oneplace-booking.zeabur.app/api/outreach/enqueue \\
+  -H "Content-Type: application/json" \\
+  -H "x-outreach-secret: <密鑰>" \\
+  -d '{
+    "dedupeKey": "ragic:billing:0912345678:2026-06-15",
+    "tag": "帳務通知",
+    "to": { "phone": "0912345678" },
+    "immediate": true,
+    "text": "您好，您的 6 月帳單已產生，請於 6/15 前繳款，謝謝。"
+  }'
+
+範例 B — 圖文卡片（要排版/按鈕才用 card；會長成方框卡片）：
 curl -X POST https://oneplace-booking.zeabur.app/api/outreach/enqueue \\
   -H "Content-Type: application/json" \\
   -H "x-outreach-secret: <密鑰>" \\

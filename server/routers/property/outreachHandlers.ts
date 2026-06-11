@@ -370,8 +370,12 @@ export async function enqueueMessage(body: any): Promise<{ status: number; json:
   if (!isSupabaseConfigured()) return { status: 503, json: { error: "SUPABASE_DB_URL not set" } };
   const dedupeKey = String(body?.dedupeKey || "").trim();
   if (!dedupeKey) return { status: 400, json: { error: "missing: dedupeKey" } };
-  const card = body?.card;
-  if (!card || typeof card !== "object") return { status: 400, json: { error: "missing/invalid: card（須為 LINE message 或 bubble JSON 物件）" } };
+  let card = body?.card;
+  // 純文字捷徑：帶 text（字串）就自動包成 LINE 文字訊息，不用自己組卡片 JSON
+  if (!card && typeof body?.text === "string" && body.text.trim()) {
+    card = { type: "text", text: String(body.text) };
+  }
+  if (!card || typeof card !== "object") return { status: 400, json: { error: "至少要給 text（純文字）或 card（卡片 JSON）其中一個" } };
   const uid = String(body?.to?.uid || "").trim();
   const phone = String(body?.to?.phone || "").trim();
   if ((!uid && !phone) || (uid && phone)) return { status: 400, json: { error: "to.uid 或 to.phone 擇一必填" } };
