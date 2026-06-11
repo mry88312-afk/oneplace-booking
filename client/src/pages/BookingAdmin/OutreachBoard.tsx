@@ -151,13 +151,6 @@ outreach.recompute_schedule() 會自動掃過所有 enabled 規則產生排程�
 （在這裡描述：到期前幾天 / 入住後幾天、規則名稱、卡片文案重點、要不要回饋按鈕、要不要自動確認、篩選有沒有要跟別人不一樣…）`;
 
 // ── 排程看板 ──────────────────────────────────────────────────────────────────
-const RULE_OPTIONS = [
-  { key: "all", label: "全部卡別" },
-  { key: "onboarding_d15", label: "入住問候 +15" },
-  { key: "expiry_d60", label: "續約 −60" },
-  { key: "expiry_d30", label: "續約 −30" },
-  { key: "expiry_d15", label: "催約 −15" },
-];
 function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -165,6 +158,7 @@ function computeRange(preset: string, cFrom: string, cTo: string): { from?: stri
   const today = new Date();
   const t = ymd(today);
   if (preset === "today") { return { from: t, to: t }; }
+  if (preset === "overdue") { const y = new Date(today); y.setDate(today.getDate() - 1); return { to: ymd(y) }; }
   if (preset === "week") { const s = new Date(today); s.setDate(today.getDate() + ((7 - today.getDay()) % 7)); return { from: t, to: ymd(s) }; }
   if (preset === "month") { return { from: t, to: ymd(new Date(today.getFullYear(), today.getMonth() + 1, 0)) }; }
   if (preset === "next30") { const s = new Date(today); s.setDate(today.getDate() + 30); return { from: t, to: ymd(s) }; }
@@ -201,7 +195,10 @@ function summarizeBatch(results: { ok: boolean; error?: string }[], label: strin
   else toast.warning(`${label}：成功 ${ok}、失敗 ${fail}（例：${results.find((r) => !r.ok)?.error || ""}）`);
 }
 
-function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
+function ScheduleTab({ rules }: { rules: any[] }) {
+  // 卡別選項與名稱直接跟著規則表走（改名/加規則自動反映，不再寫死）
+  const ruleLabels: Record<string, string> = Object.fromEntries(rules.map((r: any) => [r.key, r.label || r.key]));
+  const ruleOptions = [{ key: "all", label: "全部卡別" }, ...rules.map((r: any) => ({ key: r.key, label: r.label || r.key }))];
   const [view, setView] = useState<"upcoming" | "history" | "failed">("upcoming");
   const [preset, setPreset] = useState<string>("week");
   const [customFrom, setCustomFrom] = useState("");
@@ -267,7 +264,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
   const summary = (summaryQuery.data || []) as any[];
   const ruleCount = (rk: string) =>
     summary.filter((s) => s.rule_key === rk && (s.status === "pending" || s.status === "confirmed")).reduce((a, s) => a + s.n, 0);
-  const totalCount = ["onboarding_d15", "expiry_d60", "expiry_d30", "expiry_d15"].reduce((a, k) => a + ruleCount(k), 0);
+  const totalCount = rules.reduce((a: number, r: any) => a + ruleCount(r.key), 0);
 
   const batchBusy = batchUpdate.isPending || batchSend.isPending;
   const allVisibleSelected = rows.length > 0 && rows.every((r: any) => selected.has(r.id));
@@ -373,6 +370,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
               <SelectItem value="next30">未來 30 天</SelectItem>
               <SelectItem value="future">全部未來</SelectItem>
               <SelectItem value="custom">自訂區間</SelectItem>
+              <SelectItem value="overdue">逾期未發</SelectItem>
             </SelectContent>
           </Select>
         )}
@@ -397,7 +395,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
         <Select value={ruleFilter} onValueChange={setRuleFilter}>
           <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {RULE_OPTIONS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+            {ruleOptions.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={sourceFilter} onValueChange={setSourceFilter}>
@@ -437,10 +435,9 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
       {view === "upcoming" ? (
         <div className="flex items-center gap-2 flex-wrap text-xs">
           <span className="font-semibold">此區間待發 {totalCount} 筆：</span>
-          <span className="px-2 py-0.5 rounded-full bg-slate-100">入住問候 {ruleCount("onboarding_d15")}</span>
-          <span className="px-2 py-0.5 rounded-full bg-blue-100">續約−60 {ruleCount("expiry_d60")}</span>
-          <span className="px-2 py-0.5 rounded-full bg-amber-100">續約−30 {ruleCount("expiry_d30")}</span>
-          <span className="px-2 py-0.5 rounded-full bg-red-100">催約−15 {ruleCount("expiry_d15")}</span>
+          {rules.map((r: any) => (
+            <span key={r.key} className="px-2 py-0.5 rounded-full bg-muted">{r.label || r.key} {ruleCount(r.key)}</span>
+          ))}
           <span className="text-muted-foreground ml-auto">顯示 {rows.length} 筆</span>
         </div>
       ) : (
@@ -546,7 +543,14 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
   }, [rule]);
 
   const updateRule = trpc.outreach.updateRule.useMutation({
-    onSuccess: () => { toast.success(`已儲存規則：${rule.key}`); onSaved(); },
+    onSuccess: (r: any) => {
+      toast.success(
+        r?.confirmedNow
+          ? `已儲存規則：${rule.key}，並將 ${r.confirmedNow} 筆未來待確認排程轉為已確認`
+          : `已儲存規則：${rule.key}`,
+      );
+      onSaved();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -602,7 +606,7 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
         <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 bg-muted/30">
           <div className="min-w-0">
             <Label className="text-xs font-semibold">自動確認（auto_confirm）</Label>
-            <p className="text-[11px] text-muted-foreground">開啟後，此規則新產生的排程會直接設為「已確認」、到期當天自動派送，<b>免人工確認</b>（仍受測試模式與發送前防重保護）。預設關閉。</p>
+            <p className="text-[11px] text-muted-foreground">開啟後，此規則新產生的排程會直接設為「已確認」、到期自動派送，<b>免人工確認</b>（仍受測試模式與發送前防重保護）。儲存時也會把此規則現有「未來待確認」的排程一併轉為已確認；<b>已逾期的不會自動補發</b>（用排程看板的「逾期未發」檢視處理）。</p>
           </div>
           <Switch checked={autoConfirm} onCheckedChange={setAutoConfirm} />
         </div>
@@ -1080,8 +1084,6 @@ export function OutreachBoard() {
   const rulesQuery = trpc.outreach.listRules.useQuery(undefined, { refetchOnWindowFocus: false });
   const settingsQuery = trpc.outreach.getSettings.useQuery(undefined, { refetchOnWindowFocus: false });
   const testUid = (settingsQuery.data as any)?.test_redirect_uid as string | null | undefined;
-  const ruleLabels: Record<string, string> = {};
-  for (const r of (rulesQuery.data || []) as any[]) ruleLabels[r.key] = r.label;
 
   return (
     <div className="space-y-4">
@@ -1107,7 +1109,7 @@ export function OutreachBoard() {
           <TabsTrigger value="test">測試發送</TabsTrigger>
         </TabsList>
         <TabsContent value="schedule" className="mt-4">
-          <ScheduleTab ruleLabels={ruleLabels} />
+          <ScheduleTab rules={(rulesQuery.data || []) as any[]} />
         </TabsContent>
         <TabsContent value="rules" className="mt-4">
           <RulesTab />

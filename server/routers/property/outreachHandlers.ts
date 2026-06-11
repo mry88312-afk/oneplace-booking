@@ -64,9 +64,9 @@ function computeVars(row: ScheduleRow): Record<string, string> {
   };
   if (row.contract_end_date) {
     const end = new Date(row.contract_end_date + "T00:00:00Z").getTime();
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const days = Math.round((end - today.getTime()) / 86_400_000);
+    const tp = new Date(Date.now() + 8 * 3600_000); // 「今天」以台北日期計，避免凌晨時段差一天
+    const todayMs = Date.UTC(tp.getUTCFullYear(), tp.getUTCMonth(), tp.getUTCDate());
+    const days = Math.round((end - todayMs) / 86_400_000);
     vars.days_until_expiry = String(days);
   }
   // 列自帶變數（booking 提醒帶 booking_date/booking_time 等）後蓋前
@@ -184,7 +184,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
             s.rule_key, to_char(s.scheduled_date, 'YYYY-MM-DD') as scheduled_date,
             s.status, s.manually_edited, s.suppressed_reason, s.sent_at,
             s.source, s.recipient_phone, s.alt_text, s.vars, s.card_override,
-            r.card_template
+            r.card_template, r.label as rule_label
        from outreach.schedule s
        left join outreach.rule r on r.key = s.rule_key
       where s.id = any($1::uuid[])`,
@@ -207,7 +207,10 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       }
       // 卡片：api 來源帶 card_override，其餘用規則卡
       const card = row.card_override ?? row.card_template;
-      const altText = row.alt_text || RULE_ALT_TEXT[row.rule_key] || "一方生活通知";
+      const altText =
+        row.alt_text ||
+        RULE_ALT_TEXT[row.rule_key] ||
+        ((row as any).rule_label ? "一方生活｜" + (row as any).rule_label : "一方生活通知");
       if (!card) {
         if (!redirect) await markSendFailure(row.id, "無卡片內容（card_override 與規則卡皆空）");
         result.failed++;
@@ -694,7 +697,7 @@ export const outreachRouter = router({
         `select s.id, s.tenant_uid, s.tenant_name, s.room, s.property_name, s.contract_no,
                 to_char(s.contract_end_date,'YYYY-MM-DD') as contract_end_date,
                 s.rule_key, to_char(s.scheduled_date,'YYYY-MM-DD') as scheduled_date,
-                s.status, s.manually_edited, s.suppressed_reason, s.sent_at, r.card_template
+                s.status, s.manually_edited, s.suppressed_reason, s.sent_at, r.card_template, r.label as rule_label
            from outreach.schedule s join outreach.rule r on r.key = s.rule_key
           where s.id = $1`,
         [input.id],
@@ -703,7 +706,7 @@ export const outreachRouter = router({
       const row = rows[0];
       const msg = toFlexMessage(
         renderTemplate(row.card_template, computeVars(row)),
-        "【預覽】" + (RULE_ALT_TEXT[row.rule_key] || "一方生活通知"),
+        "【預覽】" + (RULE_ALT_TEXT[row.rule_key] || (row as any).rule_label || "一方生活通知"),
       );
       const push = await pushLineDirect(redirect, msg);
       if (!push.success)
@@ -810,10 +813,20 @@ export const outreachRouter = router({
         params.push(JSON.stringify(input.cardTemplate));
         sets.push(`card_template=$${params.length}::jsonb`);
       }
-      if (!sets.length) return { ok: true };
+      if (!sets.length) return { ok: true, confirmedNow: 0 };
       sets.push(`updated_at=now()`);
       await sbQuery(`update outreach.rule set ${sets.join(", ")} where key=$1`, params);
-      return { ok: true };
+      // 開啟自動確認：把該規則現有「未來、待確認」排程一併轉已確認（已逾期者不動，避免突然補發舊卡）
+      let confirmedNow = 0;
+      if (input.autoConfirm === true) {
+        const conf = await sbQuery<{ id: string }>(
+          `update outreach.schedule set status='confirmed', updated_at=now()
+            where rule_key=$1 and status='pending' and send_at > now() returning id`,
+          [input.key],
+        );
+        confirmedNow = conf.length;
+      }
+      return { ok: true, confirmedNow };
     }),
 
   /** 未綁 UID 主客清單：有效合約但鏡像無 line_uid（可篩 N 天內到期，供人工聯繫到期詢問對象） */
