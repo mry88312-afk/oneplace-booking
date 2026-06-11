@@ -81,6 +81,7 @@ export default function BookingPublic() {
   const [verifiedPhone, setVerifiedPhone] = useState("");
   const [remittanceVA, setRemittanceVA] = useState(""); // 付款設定取得的虛擬帳號，帶到確認卡
   const [verifiedEmail, setVerifiedEmail] = useState(""); // 既有 email，付款設定頁顯示用
+  const [verifiedJob, setVerifiedJob] = useState(""); // 既有職業（Ragic 1007377），付款設定頁預帶入
   // P23 卡片動作
   const [actionCancelled, setActionCancelled] = useState(false);
   const [actionTenantName, setActionTenantName] = useState("");
@@ -170,6 +171,7 @@ export default function BookingPublic() {
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
       setVerifiedPhone((data as any).phone || "");
       setVerifiedEmail((data as any).email || "");
+      setVerifiedJob((data as any).job || "");
       console.log("[BOOKING] verify success — isPresetMode:", isPresetMode, "presetSlot.data:", !!presetSlotQuery.data, "presetT:", presetT);
       if (needsRemittance(template) && !remittanceDone) {
         setView("remittance");
@@ -212,6 +214,7 @@ export default function BookingPublic() {
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
       setVerifiedPhone((data as any).phone || phoneInput.trim());
       setVerifiedEmail((data as any).email || "");
+      setVerifiedJob((data as any).job || "");
       if (needsRemittance(template) && !remittanceDone) {
         setView("remittance");
       } else if (isPresetMode && presetSlotQuery.data) {
@@ -603,7 +606,7 @@ export default function BookingPublic() {
   if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
   if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;
   if (view === "register") return <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />;
-  if (view === "remittance") return <RemittanceView template={template} name={tenantName} phone={verifiedPhone || phoneInput} existingEmail={verifiedEmail} uid={lineUserId || uid} onComplete={continueAfterRemittance} />;
+  if (view === "remittance") return <RemittanceView template={template} name={tenantName} phone={verifiedPhone || phoneInput} existingEmail={verifiedEmail} existingJob={verifiedJob} uid={lineUserId || uid} onComplete={continueAfterRemittance} />;
   if (view === "calendar") return <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />;
   if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} isBooking={isBooking} />;
   if (view === "instruction" && confirmedSlot) return <InstructionView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} onNext={handleInstructionNext} setView={setView} setConfirmedSlot={setConfirmedSlot} />;

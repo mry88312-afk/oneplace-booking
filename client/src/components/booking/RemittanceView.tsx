@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Loader2, Wallet, ShieldCheck, CheckCircle2, Phone } from "lucide-react";
+import { Loader2, Wallet, ShieldCheck } from "lucide-react";
 import { BookingContainer } from "./utils";
 
 // 你現有的 tenant-form-liff（匯訂）服務公開網址；機密邏輯都在這台。
@@ -49,17 +49,20 @@ interface RemittanceViewProps {
   phone: string;
   /** 既有 email（顯示用） */
   existingEmail?: string;
+  /** 既有職業（Ragic 1007377；預帶入可編輯） */
+  existingJob?: string;
   /** LINE userId（推虛擬帳號卡片用） */
   uid: string | null;
   /** 完成後續約流程繼續（回到 calendar / preset form），帶回虛擬帳號供確認卡顯示 */
   onComplete: (virtualAccount?: string) => void;
 }
 
-export function RemittanceView({ name, phone, existingEmail = "", uid, onComplete }: RemittanceViewProps) {
+export function RemittanceView({ name, phone, existingEmail = "", existingJob = "", uid, onComplete }: RemittanceViewProps) {
   const normalizedPhone = (phone || "").replace(/\D/g, "");
-  const [sub, setSub] = useState<"form" | "otp" | "done">("form");
+  const [sub, setSub] = useState<"form" | "otp">("form");
 
-  const [job, setJob] = useState("");
+  const [job, setJob] = useState(existingJob);
+  useEffect(() => { setJob(existingJob); }, [existingJob]);
   // 姓名 / Email 預帶入既有資料但可編輯（電話為驗證身分用，鎖定不可改）
   const [nameVal, setNameVal] = useState(name);
   const [emailVal, setEmailVal] = useState(existingEmail);
@@ -72,7 +75,6 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
   const [manualCode, setManualCode] = useState("");      // 客服/外國：可輸入較長的萬能碼
   const [manualMode, setManualMode] = useState(false);
   const otpRefs = useRef<Array<HTMLInputElement | null>>([]);
-  const [virtualAccount, setVirtualAccount] = useState("");
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -171,7 +173,6 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
         return;
       }
       const va = r.virtualAccount as string;
-      setVirtualAccount(va);
       // 把虛擬帳號（+可選 email/職業）寫回租客主檔；走預約後端，不需 idNumber、不覆蓋姓名
       try {
         await writeVA.mutateAsync({
@@ -185,7 +186,9 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
         toast.error(e?.message || "帳號寫入失敗，請稍後再試");
         return;
       }
-      setSub("done");
+      // 取消「付款設定完成」頁：設定完成後直接進預約時段（虛擬帳號已傳到 LINE）
+      toast.success("付款設定完成，繼續預約時段");
+      onComplete(va);
     } catch (err: any) {
       toast.error(err?.message || "驗證失敗，請稍後重試");
     } finally {
@@ -319,31 +322,6 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
     );
   }
 
-  // ─── done 子步驟 ─────────────────────────────────────────────────────────
-  return (
-    <BookingContainer>
-      <div className="flex-1 px-6 py-6 max-w-md mx-auto w-full">
-        <div className="text-center mb-6">
-          <div className="w-14 h-14 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-            <CheckCircle2 className="h-7 w-7 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">付款設定完成</h1>
-          <p className="text-sm text-gray-500">您的專屬固定虛擬帳號已傳送到您的 LINE</p>
-        </div>
-        <div className="rounded-xl bg-[#F5F7FA] border border-gray-200 p-5 text-center">
-          <p className="text-sm text-gray-600 leading-relaxed">
-            匯款帳號已傳送到您的 <span className="font-semibold text-[#6B8E6B]">LINE</span>，
-            請至 LINE 對話查看與複製，未來繳費皆使用該固定帳號。
-          </p>
-        </div>
-        <Button className="w-full h-12 mt-8 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
-          onClick={() => onComplete(virtualAccount)}>
-          繼續預約時段
-        </Button>
-        <p className="mt-3 flex items-center justify-center gap-1 text-xs text-gray-400">
-          <Phone className="h-3 w-3" />如有疑問請聯繫一方客服
-        </p>
-      </div>
-    </BookingContainer>
-  );
+  // done 步驟已取消：驗證成功即 onComplete 直接進預約時段，不再顯示完成頁。
+  return null;
 }

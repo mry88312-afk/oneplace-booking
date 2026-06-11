@@ -209,6 +209,7 @@ export function extractTenantInfo(record: any) {
   const tenantName = g("1007373", "房客姓名1", "姓名", "租客姓名", "Name");
   const phone = g("1007372", "連絡電話1");
   const email = g("1007542", "email", "Email", "電子郵件");
+  const job = g("1007377", "職業", "工作");
   const ragicId = record["_ragicId"];
 
   const roomNumber = g("1008436", "目前入住房間");
@@ -218,7 +219,7 @@ export function extractTenantInfo(record: any) {
   const contractId = g("1019285", "最新合約編號");
   const propertyId = g("1010546", "案場編號");
 
-  return { tenantName, phone, email, roomNumber, propertyName, address, contractStatus, contractId, propertyId, ragicId };
+  return { tenantName, phone, email, job, roomNumber, propertyName, address, contractStatus, contractId, propertyId, ragicId };
 }
 
 /** 從 service-department/4 合約表查詢房源資訊（用電話或姓名） */
