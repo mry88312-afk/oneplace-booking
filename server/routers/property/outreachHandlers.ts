@@ -834,7 +834,13 @@ export const outreachRouter = router({
     .input(z.object({ expiringWithinDays: z.number().int().min(1).max(365).optional() }).optional())
     .query(async ({ input }) => {
       if (!isSupabaseConfigured()) return [];
-      const params: any[] = [];
+      // 套用與排程相同的篩選：只留 include set（預設 總公司），排除 exclude set（預設 靠行）
+      const setRows = await sbQuery<{ inc: string[] | null; exc: string[] | null }>(
+        `select include_ownership_regions as inc, exclude_hq_categories as exc from outreach.settings where id=1`,
+      );
+      const inc = setRows[0]?.inc?.length ? setRows[0].inc : ["總公司"];
+      const exc = setRows[0]?.exc?.length ? setRows[0].exc : ["靠行"];
+      const params: any[] = [inc, exc];
       let having = "";
       if (input?.expiringWithinDays) {
         params.push(input.expiringWithinDays);
@@ -851,6 +857,8 @@ export const outreachRouter = router({
            join property.properties p on p.id = tc.property_id
            left join property.units u on u.id = tc.unit_id
           where (t.line_uid is null or t.line_uid = '')
+            and p.ownership_region = any($1)
+            and (p.hq_internal_category is null or not (p.hq_internal_category = any($2)))
           group by t.id, t.primary_name, t.primary_phone, p.short_name, coalesce(u.unit_no, u.room_code)
           ${having}
           order by max(tc.end_date) asc nulls last
