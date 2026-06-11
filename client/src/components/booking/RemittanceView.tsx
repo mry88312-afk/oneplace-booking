@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Loader2, Wallet, ShieldCheck, Copy, CheckCircle2, Phone } from "lucide-react";
+import { Loader2, Wallet, ShieldCheck, CheckCircle2, Phone } from "lucide-react";
 import { BookingContainer } from "./utils";
 
 // 你現有的 tenant-form-liff（匯訂）服務公開網址；機密邏輯都在這台。
@@ -60,6 +60,11 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
   const [sub, setSub] = useState<"form" | "otp" | "done">("form");
 
   const [job, setJob] = useState("");
+  // 姓名 / Email 預帶入既有資料但可編輯（電話為驗證身分用，鎖定不可改）
+  const [nameVal, setNameVal] = useState(name);
+  const [emailVal, setEmailVal] = useState(existingEmail);
+  useEffect(() => { setNameVal(name); }, [name]);
+  useEffect(() => { setEmailVal(existingEmail); }, [existingEmail]);
   const writeVA = trpc.booking.writeRenewalVirtualAccount.useMutation();
 
   const [isForeign, setIsForeign] = useState(false);
@@ -112,11 +117,12 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
     if (!/^\d{8,15}$/.test(normalizedPhone)) {
       return toast.error("檔內電話格式有誤，請聯繫客服");
     }
+    if (!nameVal.trim()) return toast.error("請填寫姓名");
     if (!job.trim()) return toast.error("請填寫職業");
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
-        phone: normalizedPhone, name, email: existingEmail, job: job.trim(),
+        phone: normalizedPhone, name: nameVal.trim(), email: emailVal.trim(), job: job.trim(),
       });
       if (r.success) {
         if (r.devMode) toast.success("開發模式：請用固定驗證碼");
@@ -143,7 +149,7 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
-        phone: normalizedPhone, name, email: existingEmail, job: job.trim(),
+        phone: normalizedPhone, name: nameVal.trim(), email: emailVal.trim(), job: job.trim(),
       });
       if (r.success) { toast.success("驗證碼已重新發送"); clearOtp(); startCountdown(); }
       else toast.error(r.message || "發送失敗");
@@ -172,7 +178,7 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
           uid: uid || undefined,
           phone: normalizedPhone,
           virtualAccount: va,
-          email: existingEmail || undefined,
+          email: emailVal.trim() || undefined,
           job: job.trim() || undefined,
         });
       } catch (e: any) {
@@ -184,17 +190,6 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
       toast.error(err?.message || "驗證失敗，請稍後重試");
     } finally {
       setVerifying(false);
-    }
-  };
-
-  const handleCopy = () => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(virtualAccount).then(
-        () => toast.success("帳號已複製"),
-        () => toast.error("複製失敗，請手動複製"),
-      );
-    } else {
-      toast.error("複製失敗，請手動複製");
     }
   };
 
@@ -211,20 +206,21 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
             <p className="text-sm text-gray-500">完成付款設定，取得中信專屬固定式匯款帳號</p>
           </div>
           <div className="space-y-4">
-            {/* 姓名、電話、Email 直接顯示既有資料，不需填寫 */}
-            <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">姓名</span>
-                <span className="font-semibold text-gray-900">{name || "—"}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">手機號碼</span>
+            {/* 姓名 / Email 預帶入但可編輯；手機為驗證身分用，鎖定不可改 */}
+            <div>
+              <Label className="text-sm font-medium text-gray-700">姓名 <span className="text-red-500">*</span></Label>
+              <Input value={nameVal} onChange={(e) => setNameVal(e.target.value)} className="mt-1.5 h-11" placeholder="請填寫姓名" />
+            </div>
+            <div>
+              <Label className="text-sm font-medium text-gray-700">手機號碼</Label>
+              <div className="mt-1.5 h-11 flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3">
                 <span className="font-semibold text-gray-900">{normalizedPhone || "—"}</span>
+                <span className="text-xs text-gray-400">驗證用，不可修改</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">電子郵件</span>
-                <span className="font-semibold text-gray-900 break-all text-right">{existingEmail || "—"}</span>
-              </div>
+            </div>
+            <div>
+              <Label className="text-sm font-medium text-gray-700">電子郵件</Label>
+              <Input type="email" inputMode="email" value={emailVal} onChange={(e) => setEmailVal(e.target.value)} className="mt-1.5 h-11" placeholder="example@mail.com" />
             </div>
             <div>
               <Label className="text-sm font-medium text-gray-700">職業 <span className="text-red-500">*</span></Label>
@@ -332,20 +328,13 @@ export function RemittanceView({ name, phone, existingEmail = "", uid, onComplet
             <CheckCircle2 className="h-7 w-7 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-1">付款設定完成</h1>
-          <p className="text-sm text-gray-500">這是您的專屬固定虛擬帳號，已同步傳送到您的 LINE</p>
+          <p className="text-sm text-gray-500">您的專屬固定虛擬帳號已傳送到您的 LINE</p>
         </div>
-        <div className="rounded-xl bg-[#F5F7FA] border border-gray-200 p-5 space-y-3">
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-500">銀行代碼</span>
-            <span className="font-bold text-gray-900">822（中國信託）</span>
-          </div>
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-gray-500">虛擬帳號</span>
-            <span className="font-bold text-gray-900 text-lg tracking-wider">{virtualAccount}</span>
-          </div>
-          <Button variant="outline" className="w-full h-10" onClick={handleCopy}>
-            <Copy className="h-4 w-4 mr-2" />複製帳號
-          </Button>
+        <div className="rounded-xl bg-[#F5F7FA] border border-gray-200 p-5 text-center">
+          <p className="text-sm text-gray-600 leading-relaxed">
+            匯款帳號已傳送到您的 <span className="font-semibold text-[#6B8E6B]">LINE</span>，
+            請至 LINE 對話查看與複製，未來繳費皆使用該固定帳號。
+          </p>
         </div>
         <Button className="w-full h-12 mt-8 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
           onClick={() => onComplete(virtualAccount)}>
