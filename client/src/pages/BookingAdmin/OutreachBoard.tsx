@@ -45,7 +45,8 @@ Body 欄位：
   card       必填。整張 LINE 卡片 JSON（bubble 會自動包成 flex message）
   altText    選填。通知列文字
   to         必填。{ "uid": "Uxxxx" } 或 { "phone": "0912345678" } 擇一；只給電話時發送前會自動查 LINE UID，查無會留在失敗清單、補綁後可重送
-  sendAt     必填。發送時間（ISO 8601 含時區），例 "2026-06-15T10:00:00+08:00"；已過時間則下個整點送出
+  immediate  選填。true = 立即發送：不等排程、打進來當下就發，回應會直接帶 sent/failed 結果。帶 immediate 時 sendAt 可省略
+  sendAt     immediate 未帶時必填。發送時間（ISO 8601 含時區），例 "2026-06-15T10:00:00+08:00"；系統每 5 分鐘檢查、到點即送
   tag        必填。分類標籤（看板篩選用），例 "帳務通知"
 
 curl 範例：
@@ -247,7 +248,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
 
   useEffect(() => { setSelected(new Set()); }, [view, preset, ruleFilter, sourceFilter, tagFilter, historyStatus, search, customFrom, customTo]);
 
-  const [rescheduleRow, setRescheduleRow] = useState<{ id: string; date: string } | null>(null);
+  const [rescheduleRow, setRescheduleRow] = useState<{ id: string; date: string; time: string } | null>(null);
   const rows = scheduleQuery.data || [];
 
   const summary = (summaryQuery.data || []) as any[];
@@ -312,7 +313,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
               {r.status === "confirmed" && (
                 <Button size="sm" variant="outline" onClick={() => updateItem.mutate({ id: r.id, action: "unconfirm" })}>取消確認</Button>
               )}
-              <Button size="sm" variant="outline" onClick={() => setRescheduleRow({ id: r.id, date: r.scheduled_date })}>
+              <Button size="sm" variant="outline" onClick={() => setRescheduleRow({ id: r.id, date: r.scheduled_date, time: r.send_at ? String(r.send_at).slice(11, 16) : "09:00" })}>
                 <CalendarClock className="h-3.5 w-3.5 mr-1" /> 改期
               </Button>
               {(r.status === "pending" || r.status === "confirmed") && (
@@ -481,20 +482,25 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>改期</DialogTitle>
-            <DialogDescription>調整這筆排程的發送日期（會標記為手動調整，重算不會覆蓋）。</DialogDescription>
+            <DialogDescription>調整這筆排程的發送日期與時刻（會標記為手動調整，重算不會覆蓋）。</DialogDescription>
           </DialogHeader>
-          <Input
-            type="date"
-            value={rescheduleRow?.date || ""}
-            onChange={(e) => setRescheduleRow((p) => (p ? { ...p, date: e.target.value } : p))}
-          />
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">發送日期</Label>
+              <Input type="date" className="mt-1" value={rescheduleRow?.date || ""} onChange={(e) => setRescheduleRow((p) => (p ? { ...p, date: e.target.value } : p))} />
+            </div>
+            <div>
+              <Label className="text-xs">發送時刻</Label>
+              <Input type="time" className="mt-1" value={rescheduleRow?.time || "09:00"} onChange={(e) => setRescheduleRow((p) => (p ? { ...p, time: e.target.value } : p))} />
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRescheduleRow(null)}>取消</Button>
             <Button
               onClick={() => {
                 if (!rescheduleRow?.date) { toast.error("請選擇日期"); return; }
                 updateItem.mutate(
-                  { id: rescheduleRow.id, action: "reschedule", scheduledDate: rescheduleRow.date },
+                  { id: rescheduleRow.id, action: "reschedule", scheduledDate: rescheduleRow.date, scheduledTime: rescheduleRow.time || "09:00" },
                   { onSuccess: () => { toast.success("已改期"); setRescheduleRow(null); } },
                 );
               }}
@@ -514,6 +520,7 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
   const [offsetDays, setOffsetDays] = useState<number>(rule.offset_days ?? 0);
   const [enabled, setEnabled] = useState<boolean>(!!rule.enabled);
   const [autoConfirm, setAutoConfirm] = useState<boolean>(!!rule.auto_confirm);
+  const [sendTime, setSendTime] = useState<string>(rule.send_time || "09:00");
   const [templateText, setTemplateText] = useState(JSON.stringify(rule.card_template, null, 2));
 
   useEffect(() => {
@@ -521,6 +528,7 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
     setOffsetDays(rule.offset_days ?? 0);
     setEnabled(!!rule.enabled);
     setAutoConfirm(!!rule.auto_confirm);
+    setSendTime(rule.send_time || "09:00");
     setTemplateText(JSON.stringify(rule.card_template, null, 2));
   }, [rule]);
 
@@ -537,7 +545,7 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
       toast.error("卡片 JSON 格式錯誤，請檢查");
       return;
     }
-    updateRule.mutate({ key: rule.key, label, offsetDays, enabled, autoConfirm, cardTemplate: parsed });
+    updateRule.mutate({ key: rule.key, label, offsetDays, enabled, autoConfirm, sendTime, cardTemplate: parsed });
   };
 
   return (
@@ -572,6 +580,11 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
               正數=基準日之後（入住+N）；負數=基準日之前（到期−N）
             </p>
           </div>
+        </div>
+        <div>
+          <Label className="text-xs">發送時刻（每天幾點送）</Label>
+          <Input type="time" value={sendTime} onChange={(e) => setSendTime(e.target.value)} className="mt-1 w-36" />
+          <p className="text-[11px] text-muted-foreground mt-1">此規則的卡片會在排定日的這個時刻發送（系統每 5 分鐘檢查一次；改了記得「重算排程」對新排程生效）。</p>
         </div>
         <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 bg-muted/30">
           <div className="min-w-0">
@@ -654,6 +667,7 @@ function RulesOverview({ rules }: { rules: any[] }) {
                 <th className="py-1 pr-3">名稱</th>
                 <th className="py-1 pr-3">基準</th>
                 <th className="py-1 pr-3">天數</th>
+                <th className="py-1 pr-3">時刻</th>
                 <th className="py-1 pr-3">卡片</th>
                 <th className="py-1 pr-3">篩選</th>
                 <th className="py-1 pr-3">狀態</th>
@@ -668,6 +682,7 @@ function RulesOverview({ rules }: { rules: any[] }) {
                   </td>
                   <td className="py-1.5 pr-3">{r.trigger_basis === "contract_start" ? "開始日" : r.trigger_basis === "booking_checkout" ? "退租預約" : "到期日"}</td>
                   <td className="py-1.5 pr-3">{r.offset_days > 0 ? `+${r.offset_days}` : r.offset_days}</td>
+                  <td className="py-1.5 pr-3 font-mono">{r.send_time || "—"}</td>
                   <td className="py-1.5 pr-3 max-w-[180px] truncate">{cardTitle(r)}</td>
                   <td className="py-1.5 pr-3">全域</td>
                   <td className="py-1.5 pr-3">

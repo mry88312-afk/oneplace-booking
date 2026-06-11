@@ -375,8 +375,14 @@ export async function enqueueMessage(body: any): Promise<{ status: number; json:
   const uid = String(body?.to?.uid || "").trim();
   const phone = String(body?.to?.phone || "").trim();
   if ((!uid && !phone) || (uid && phone)) return { status: 400, json: { error: "to.uid 或 to.phone 擇一必填" } };
-  const sendAtMs = Date.parse(String(body?.sendAt || ""));
-  if (Number.isNaN(sendAtMs)) return { status: 400, json: { error: "missing/invalid: sendAt（ISO 時間，例 2026-06-15T10:00:00+08:00）" } };
+  const immediate = body?.immediate === true;
+  let sendAtMs: number;
+  if (immediate) {
+    sendAtMs = Date.now(); // 立即發送：當下時間
+  } else {
+    sendAtMs = Date.parse(String(body?.sendAt || ""));
+    if (Number.isNaN(sendAtMs)) return { status: 400, json: { error: "missing/invalid: sendAt（ISO 時間，例 2026-06-15T10:00:00+08:00）；或帶 immediate:true 立即發送" } };
+  }
   const tag = String(body?.tag || "").trim();
   if (!tag) return { status: 400, json: { error: "missing: tag" } };
   const altText = body?.altText ? String(body.altText) : null;
@@ -392,7 +398,17 @@ export async function enqueueMessage(body: any): Promise<{ status: number; json:
       tag, JSON.stringify(card), altText, dedupeKey,
     ],
   );
-  if (r.length) return { status: 200, json: { ok: true, id: r[0].id, deduped: false } };
+  if (r.length) {
+    if (immediate) {
+      // 立即發送：寫入後當下直接走發送流程，同步回報結果（仍受測試模式重導保護）
+      const result = await runOutreach([r[0].id]);
+      return {
+        status: 200,
+        json: { ok: true, id: r[0].id, deduped: false, immediate: true, sent: result.sent, suppressed: result.suppressed, failed: result.failed, error: result.errors[0]?.error ?? null },
+      };
+    }
+    return { status: 200, json: { ok: true, id: r[0].id, deduped: false } };
+  }
   const existing = await sbQuery<{ id: string }>(`select id from outreach.schedule where dedupe_key=$1`, [dedupeKey]);
   return { status: 200, json: { ok: true, id: existing[0]?.id ?? null, deduped: true } };
 }
@@ -552,18 +568,31 @@ export const outreachRouter = router({
         id: z.string().uuid(),
         action: z.enum(["reschedule", "skip", "confirm", "unconfirm", "cancel"]),
         scheduledDate: z.string().optional(),
+        scheduledTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       }),
     )
     .mutation(async ({ input }) => {
       switch (input.action) {
-        case "reschedule":
+        case "reschedule": {
           if (!input.scheduledDate)
             throw new TRPCError({ code: "BAD_REQUEST", message: "缺少 scheduledDate" });
+          // 日期＋時刻一起更新 send_at（以台北時間解讀）；未給時刻沿用原 send_at 的時刻
+          const t = input.scheduledTime
+            ? `$3::time`
+            : `coalesce((send_at at time zone 'Asia/Taipei')::time, '09:00'::time)`;
+          const params = input.scheduledTime
+            ? [input.id, input.scheduledDate, input.scheduledTime]
+            : [input.id, input.scheduledDate];
           await sbQuery(
-            `update outreach.schedule set scheduled_date=$2, manually_edited=true, updated_at=now() where id=$1`,
-            [input.id, input.scheduledDate],
+            `update outreach.schedule
+                set scheduled_date=$2::date,
+                    send_at=(($2::date + ${t})::timestamp at time zone 'Asia/Taipei'),
+                    manually_edited=true, updated_at=now()
+              where id=$1`,
+            params,
           );
           break;
+        }
         case "skip":
           await sbQuery(
             `update outreach.schedule set status='skipped', updated_at=now() where id=$1`,
@@ -729,7 +758,8 @@ export const outreachRouter = router({
   listRules: adminProcedure.query(async () => {
     if (!isSupabaseConfigured()) return [];
     return await sbQuery(
-      `select key, label, trigger_basis, offset_days, enabled, card_template, sort_order, auto_confirm
+      `select key, label, trigger_basis, offset_days, enabled, card_template, sort_order, auto_confirm,
+              to_char(send_time,'HH24:MI') as send_time
          from outreach.rule order by sort_order, key`,
     );
   }),
@@ -743,6 +773,7 @@ export const outreachRouter = router({
         offsetDays: z.number().int().optional(),
         enabled: z.boolean().optional(),
         autoConfirm: z.boolean().optional(),
+        sendTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
         cardTemplate: z.any().optional(),
       }),
     )
@@ -764,6 +795,10 @@ export const outreachRouter = router({
       if (input.autoConfirm !== undefined) {
         params.push(input.autoConfirm);
         sets.push(`auto_confirm=$${params.length}`);
+      }
+      if (input.sendTime !== undefined) {
+        params.push(input.sendTime);
+        sets.push(`send_time=$${params.length}::time`);
       }
       if (input.cardTemplate !== undefined) {
         if (typeof input.cardTemplate !== "object" || input.cardTemplate === null)
