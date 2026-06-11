@@ -30,6 +30,46 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 const TEMPLATE_VARS = ["{{tenant_name}}", "{{property_name}}", "{{room}}", "{{contract_end_date}}", "{{days_until_expiry}}"];
 
+// 投遞 API 串接說明（給 Ragic / MANUS 等外部系統；放在 篩選/設定 分頁可複製）
+const ENQUEUE_PROMPT = `【一方生活｜統一發訊中樞——投遞 API 串接說明】
+
+任何系統要發 LINE 卡片給室友，請改打這支 API：訊息會進排程、看板可控管（可跳過/取消）、時間到自動發送。
+
+端點：POST https://oneplace-booking.zeabur.app/api/outreach/enqueue
+Header：
+  Content-Type: application/json
+  x-outreach-secret: <共享密鑰，向管理者索取>
+
+Body 欄位：
+  dedupeKey  必填。去重碼：同一個 dedupeKey 只會排一次（重送安全）。建議格式 來源:用途:對象:日期
+  card       必填。整張 LINE 卡片 JSON（bubble 會自動包成 flex message）
+  altText    選填。通知列文字
+  to         必填。{ "uid": "Uxxxx" } 或 { "phone": "0912345678" } 擇一；只給電話時發送前會自動查 LINE UID，查無會留在失敗清單、補綁後可重送
+  sendAt     必填。發送時間（ISO 8601 含時區），例 "2026-06-15T10:00:00+08:00"；已過時間則下個整點送出
+  tag        必填。分類標籤（看板篩選用），例 "帳務通知"
+
+curl 範例：
+curl -X POST https://oneplace-booking.zeabur.app/api/outreach/enqueue \\
+  -H "Content-Type: application/json" \\
+  -H "x-outreach-secret: <密鑰>" \\
+  -d '{
+    "dedupeKey": "ragic:billing:0912345678:2026-06-15",
+    "tag": "帳務通知",
+    "sendAt": "2026-06-15T10:00:00+08:00",
+    "to": { "phone": "0912345678" },
+    "altText": "一方生活｜帳務通知",
+    "card": { "type": "bubble", "size": "mega", "body": { "type": "box", "layout": "vertical", "paddingAll": "20px", "contents": [ { "type": "text", "text": "您好，您的 6 月帳單已產生", "wrap": true } ] } }
+  }'
+
+回應：200 {"ok":true,"id":"…","deduped":false}；同碼重打 → deduped:true（不重複排）；401 密鑰錯；400 缺欄位（訊息指明缺哪欄）。
+注意：後台「測試模式」開啟時，所有發送都會改寄到測試 LINE、不會送給室友——串接驗證請先在測試模式下做。`;
+
+const SOURCE_MAP: Record<string, { label: string; color: string }> = {
+  rule: { label: "規則", color: "bg-slate-100 text-slate-600" },
+  booking: { label: "退租提醒", color: "bg-teal-100 text-teal-800" },
+  api: { label: "外部API", color: "bg-indigo-100 text-indigo-800" },
+};
+
 // 給 AI 用的「卡片產生 Prompt」：使用者複製 → 貼到 ChatGPT/Claude → 描述需求 → 產出可貼進規則的 Flex JSON。
 const CARD_PROMPT = `你是「一方生活」週期詢問 LINE 卡片設計助手。請依我接下來的需求，產出「一個合法的 LINE Flex Message bubble JSON」（單一 bubble 物件即可，系統會自動包成 flex message 並處理 altText）。
 
@@ -153,6 +193,8 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [ruleFilter, setRuleFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
   const [historyStatus, setHistoryStatus] = useState<string>("sent");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -160,7 +202,13 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const range = view === "upcoming" ? computeRange(preset, customFrom, customTo) : {};
-  const listInput: any = { ruleKey: ruleFilter === "all" ? undefined : ruleFilter, search: search || undefined, ...range };
+  const listInput: any = {
+    ruleKey: ruleFilter === "all" ? undefined : ruleFilter,
+    source: sourceFilter === "all" ? undefined : sourceFilter,
+    tag: tagFilter === "all" ? undefined : tagFilter,
+    search: search || undefined,
+    ...range,
+  };
   if (view === "upcoming") listInput.statuses = ["pending", "confirmed"];
   else if (view === "history") listInput.status = historyStatus;
   else listInput.onlyFailed = true;
@@ -197,7 +245,7 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
     onError: (e) => toast.error(e.message),
   });
 
-  useEffect(() => { setSelected(new Set()); }, [view, preset, ruleFilter, historyStatus, search, customFrom, customTo]);
+  useEffect(() => { setSelected(new Set()); }, [view, preset, ruleFilter, sourceFilter, tagFilter, historyStatus, search, customFrom, customTo]);
 
   const [rescheduleRow, setRescheduleRow] = useState<{ id: string; date: string } | null>(null);
   const rows = scheduleQuery.data || [];
@@ -225,7 +273,14 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="font-mono text-sm font-semibold">{r.scheduled_date}</span>
-                  <Badge variant="outline">{ruleLabels[r.rule_key] || r.rule_key}</Badge>
+                  {r.send_at && <span className="font-mono text-xs text-muted-foreground">{String(r.send_at).slice(11)} 發</span>}
+                  <Badge variant="outline">{r.rule_key ? (ruleLabels[r.rule_key] || r.rule_key) : "自訂卡片"}</Badge>
+                  {r.source && r.source !== "rule" && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${(SOURCE_MAP[r.source] || SOURCE_MAP.rule).color}`}>
+                      {(SOURCE_MAP[r.source] || SOURCE_MAP.rule).label}
+                    </span>
+                  )}
+                  {r.tag && <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">#{r.tag}</span>}
                   <span className={`text-xs px-2 py-0.5 rounded-full ${st.color}`}>{st.label}</span>
                   {r.status === "sent" && r.sent_at && <span className="text-[10px] text-muted-foreground">發送於 {String(r.sent_at).replace("T", " ").slice(0, 16)}</span>}
                   {r.manually_edited && <span className="text-[10px] text-muted-foreground">（已手動調整）</span>}
@@ -331,6 +386,26 @@ function ScheduleTab({ ruleLabels }: { ruleLabels: Record<string, string> }) {
             {RULE_OPTIONS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Select value={sourceFilter} onValueChange={setSourceFilter}>
+          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部來源</SelectItem>
+            <SelectItem value="rule">合約規則</SelectItem>
+            <SelectItem value="booking">退租提醒</SelectItem>
+            <SelectItem value="api">外部API</SelectItem>
+          </SelectContent>
+        </Select>
+        {(tagFilter !== "all" || rows.some((r: any) => r.tag)) && (
+          <Select value={tagFilter} onValueChange={setTagFilter}>
+            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部標籤</SelectItem>
+              {[...new Set([...(tagFilter !== "all" ? [tagFilter] : []), ...rows.map((r: any) => r.tag).filter(Boolean)])].map((t: any) => (
+                <SelectItem key={t} value={t}>{t}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <div className="flex items-center gap-1">
           <Input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput); }} placeholder="搜尋姓名/房號/案場" className="w-44" autoComplete="off" />
           <Button variant="outline" size="sm" onClick={() => setSearch(searchInput)}>搜尋</Button>
@@ -472,7 +547,7 @@ function RuleEditorCard({ rule, onSaved }: { rule: any; onSaved: () => void }) {
           <div className="flex items-center gap-2">
             <code className="text-xs bg-muted px-2 py-0.5 rounded">{rule.key}</code>
             <Badge variant="outline">
-              {rule.trigger_basis === "contract_start" ? "合約開始日" : "合約到期日"}
+              {rule.trigger_basis === "contract_start" ? "合約開始日" : rule.trigger_basis === "booking_checkout" ? "退租預約" : "合約到期日"}
             </Badge>
           </div>
           <div className="flex items-center gap-2">
@@ -591,7 +666,7 @@ function RulesOverview({ rules }: { rules: any[] }) {
                     {r.label}
                     <div className="text-[10px] text-muted-foreground font-mono">{r.key}</div>
                   </td>
-                  <td className="py-1.5 pr-3">{r.trigger_basis === "contract_start" ? "開始日" : "到期日"}</td>
+                  <td className="py-1.5 pr-3">{r.trigger_basis === "contract_start" ? "開始日" : r.trigger_basis === "booking_checkout" ? "退租預約" : "到期日"}</td>
                   <td className="py-1.5 pr-3">{r.offset_days > 0 ? `+${r.offset_days}` : r.offset_days}</td>
                   <td className="py-1.5 pr-3 max-w-[180px] truncate">{cardTitle(r)}</td>
                   <td className="py-1.5 pr-3">全域</td>
@@ -735,6 +810,11 @@ function SettingsTab() {
           </div>
         </CardContent>
       </Card>
+      <PromptCard
+        title="投遞 API 串接說明（給 Ragic / MANUS 用）"
+        desc="其他系統要發卡片給室友時，照這份說明打我們的投遞 API——訊息進排程、看板可控管、時間到自動發送。複製整段給串接的人即可。"
+        text={ENQUEUE_PROMPT}
+      />
       <Separator />
       <div>
         <Label className="text-sm font-semibold">案件歸屬（ownership_region）include set</Label>
@@ -843,6 +923,69 @@ function TestSendTab() {
   );
 }
 
+// ── 未綁 UID Tab ───────────────────────────────────────────────────────────────
+function UnboundTab() {
+  const [expiringOnly, setExpiringOnly] = useState(false);
+  const q = trpc.outreach.listUnboundTenants.useQuery(
+    expiringOnly ? { expiringWithinDays: 60 } : {},
+    { refetchOnWindowFocus: false },
+  );
+  const rows = (q.data || []) as any[];
+  const exportUnbound = () => {
+    const header = ["姓名", "電話", "案場", "房號", "合約到期日"];
+    const esc = (v: any) => { const s = v == null ? "" : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const body = rows.map((r) => [r.tenant_name, r.phone, r.property_name, r.room, r.contract_end_date].map(esc).join(",")).join("\r\n");
+    const blob = new Blob(["﻿" + header.join(",") + "\r\n" + body], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `unbound_uid_${ymd(new Date())}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        這些主客<b>有有效合約但還沒綁 LINE</b>——系統發不到他們（不會進排程）。到期詢問請照此名單由同事人工聯繫；綁定後（用 LINE 開過預約頁）會自動從名單消失。
+      </p>
+      <div className="flex items-center gap-3 flex-wrap">
+        <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+          <Checkbox checked={expiringOnly} onCheckedChange={(v) => setExpiringOnly(!!v)} /> 只看 60 天內到期
+        </label>
+        <span className="text-xs text-muted-foreground">共 {rows.length} 人</span>
+        <Button variant="outline" size="sm" onClick={() => q.refetch()}><RefreshCw className="h-3.5 w-3.5 mr-1" /> 重新整理</Button>
+        <Button variant="outline" size="sm" onClick={exportUnbound} disabled={!rows.length}><Download className="h-3.5 w-3.5 mr-1" /> 匯出 CSV</Button>
+      </div>
+      {q.isLoading ? (
+        <div className="flex items-center justify-center py-12 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin mr-2" /> 載入中...</div>
+      ) : rows.length === 0 ? (
+        <div className="text-center py-12 text-sm text-muted-foreground">沒有未綁 UID 的主客 🎉</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="text-left text-muted-foreground border-b text-xs">
+                <th className="py-1.5 pr-3">姓名</th><th className="py-1.5 pr-3">電話</th>
+                <th className="py-1.5 pr-3">案場</th><th className="py-1.5 pr-3">房號</th>
+                <th className="py-1.5 pr-3">合約到期日</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="py-1.5 pr-3 font-medium">{r.tenant_name || "（無姓名）"}</td>
+                  <td className="py-1.5 pr-3 font-mono">{r.phone || "—"}</td>
+                  <td className="py-1.5 pr-3">{r.property_name || "—"}</td>
+                  <td className="py-1.5 pr-3">{r.room || "—"}</td>
+                  <td className="py-1.5 pr-3 font-mono">{r.contract_end_date || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 成效統計 Tab ───────────────────────────────────────────────────────────────
 function StatsTab() {
   const [months, setMonths] = useState(6);
@@ -931,6 +1074,7 @@ export function OutreachBoard() {
           <TabsTrigger value="schedule">排程看板</TabsTrigger>
           <TabsTrigger value="rules">規則 / 卡片</TabsTrigger>
           <TabsTrigger value="stats">成效</TabsTrigger>
+          <TabsTrigger value="unbound">未綁UID</TabsTrigger>
           <TabsTrigger value="settings">篩選 / 設定</TabsTrigger>
           <TabsTrigger value="test">測試發送</TabsTrigger>
         </TabsList>
@@ -942,6 +1086,9 @@ export function OutreachBoard() {
         </TabsContent>
         <TabsContent value="stats" className="mt-4">
           <StatsTab />
+        </TabsContent>
+        <TabsContent value="unbound" className="mt-4">
+          <UnboundTab />
         </TabsContent>
         <TabsContent value="settings" className="mt-4">
           <SettingsTab />

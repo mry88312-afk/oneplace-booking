@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, gte, lt } from "drizzle-orm";
 import { router, adminProcedure } from "../../_core/trpc";
 import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
 import { getDb } from "../../db";
@@ -32,6 +32,11 @@ type ScheduleRow = {
   manually_edited: boolean;
   suppressed_reason: string | null;
   sent_at: string | null;
+  source?: string;
+  recipient_phone?: string | null;
+  alt_text?: string | null;
+  vars?: Record<string, any> | null;
+  card_override?: any;
 };
 
 /** 把卡片範本內的 {{變數}} 換成實際值（JSON-safe）。 */
@@ -64,7 +69,20 @@ function computeVars(row: ScheduleRow): Record<string, string> {
     const days = Math.round((end - today.getTime()) / 86_400_000);
     vars.days_until_expiry = String(days);
   }
+  // 列自帶變數（booking 提醒帶 booking_date/booking_time 等）後蓋前
+  if (row.vars && typeof row.vars === "object") {
+    for (const [k, v] of Object.entries(row.vars)) vars[k] = String(v ?? "");
+  }
   return vars;
+}
+
+/** 台北時區 'YYYY-MM-DD'（輸入 ms 時間戳）。 */
+function taipeiYmd(ms: number): string {
+  return new Date(ms + 8 * 3600_000).toISOString().slice(0, 10);
+}
+/** 台北時區 'HH:mm'。 */
+function taipeiHm(ms: number): string {
+  return new Date(ms + 8 * 3600_000).toISOString().slice(11, 16);
 }
 
 /**
@@ -165,9 +183,10 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
             to_char(s.contract_end_date, 'YYYY-MM-DD') as contract_end_date,
             s.rule_key, to_char(s.scheduled_date, 'YYYY-MM-DD') as scheduled_date,
             s.status, s.manually_edited, s.suppressed_reason, s.sent_at,
+            s.source, s.recipient_phone, s.alt_text, s.vars, s.card_override,
             r.card_template
        from outreach.schedule s
-       join outreach.rule r on r.key = s.rule_key
+       left join outreach.rule r on r.key = s.rule_key
       where s.id = any($1::uuid[])`,
     [scheduleIds],
   );
@@ -186,12 +205,18 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         result.skipped++;
         continue;
       }
+      // 卡片：api 來源帶 card_override，其餘用規則卡
+      const card = row.card_override ?? row.card_template;
+      const altText = row.alt_text || RULE_ALT_TEXT[row.rule_key] || "一方生活通知";
+      if (!card) {
+        if (!redirect) await markSendFailure(row.id, "無卡片內容（card_override 與規則卡皆空）");
+        result.failed++;
+        result.errors.push({ id: row.id, error: "no card" });
+        continue;
+      }
       if (redirect) {
         // 測試模式：改寄到測試 LINE、跳過防重、不改原排程狀態（可重複測、永不送真人）
-        const tmsg = toFlexMessage(
-          renderTemplate(row.card_template, computeVars(row)),
-          "【測試】" + (RULE_ALT_TEXT[row.rule_key] || "一方生活通知"),
-        );
+        const tmsg = toFlexMessage(renderTemplate(card, computeVars(row)), "【測試】" + altText);
         const tpush = await pushLineDirect(redirect, tmsg);
         if (tpush.success) result.sent++;
         else {
@@ -200,7 +225,50 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         }
         continue;
       }
-      if (await hasActiveBookingSuppress(row.tenant_uid)) {
+      // 退租提醒：發送前再驗（解掃描後取消/改期）
+      if (row.source === "booking") {
+        const bid = Number(row.vars?.booking_id);
+        const db = await getDb();
+        const bk = db && bid
+          ? await db.select({ status: schema.bookingRecords.status, bookingTime: schema.bookingRecords.bookingTime })
+              .from(schema.bookingRecords).where(eq(schema.bookingRecords.id, bid)).limit(1)
+          : [];
+        const ok = bk.length > 0 && bk[0].status === "confirmed" && taipeiYmd(bk[0].bookingTime) === String(row.vars?.booking_date || "");
+        if (!ok) {
+          await sbQuery(
+            `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1`,
+            [row.id, "退租預約已取消或已改期（發送前再驗）"],
+          );
+          result.skipped++;
+          continue;
+        }
+      }
+      // 收件人：只有電話的（api 來源）發送前換 UID；查無留失敗可重試
+      let targetUid = row.tenant_uid;
+      if (!targetUid && row.recipient_phone) {
+        const normalized = row.recipient_phone.replace(/[\s\-()]/g, "");
+        const t = await sbQuery<{ line_uid: string }>(
+          `select line_uid from contract.tenants where primary_phone=$1 and line_uid is not null and line_uid<>'' limit 1`,
+          [normalized],
+        );
+        if (t.length) {
+          targetUid = t[0].line_uid;
+          await sbQuery(`update outreach.schedule set tenant_uid=$2, updated_at=now() where id=$1`, [row.id, targetUid]);
+        } else {
+          await markSendFailure(row.id, `查無 LINE UID（電話 ${normalized}），綁定後可重送`);
+          result.failed++;
+          result.errors.push({ id: row.id, error: `no LINE UID for phone ${normalized}` });
+          continue;
+        }
+      }
+      if (!targetUid) {
+        await markSendFailure(row.id, "無收件人（uid 與電話皆空）");
+        result.failed++;
+        result.errors.push({ id: row.id, error: "no recipient" });
+        continue;
+      }
+      // 防重打擾只適用合約規則卡（booking 提醒本來就該有退租預約；api 內容由來源系統決定）
+      if ((row.source ?? "rule") === "rule" && (await hasActiveBookingSuppress(targetUid))) {
         await sbQuery(
           `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1`,
           [row.id, "已有續約/退租預約（booking_records 即時查核）"],
@@ -208,11 +276,8 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         result.suppressed++;
         continue;
       }
-      const message = toFlexMessage(
-        renderTemplate(row.card_template, computeVars(row)),
-        RULE_ALT_TEXT[row.rule_key],
-      );
-      const push = await pushLineDirect(row.tenant_uid, message);
+      const message = toFlexMessage(renderTemplate(card, computeVars(row)), altText);
+      const push = await pushLineDirect(targetUid, message);
       if (push.success) {
         await sbQuery(
           `update outreach.schedule set status='sent', sent_at=now(), last_error=null, updated_at=now() where id=$1`,
@@ -235,6 +300,101 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
     }
   }
   return result;
+}
+
+/**
+ * 退租提醒掃描（每日台北 17:00 由 pg_cron 經 pg_net 呼叫）：
+ * 掃 TiDB「台北明天」的退租 confirmed 預約 → 排入今天 18:00（台北）的提醒；dedupe_key 擋重複。
+ */
+export async function scanCheckoutReminders(): Promise<{ ok: boolean; scanned: number; inserted: number }> {
+  if (!isSupabaseConfigured()) throw new Error("SUPABASE_DB_URL not set");
+  const db = await getDb();
+  if (!db) throw new Error("TiDB unavailable");
+  // 台北「明天」的 [00:00, 24:00) 換成 UTC 毫秒區間
+  const nowTp = new Date(Date.now() + 8 * 3600_000);
+  const tomorrowTpMidnightUtcMs =
+    Date.UTC(nowTp.getUTCFullYear(), nowTp.getUTCMonth(), nowTp.getUTCDate() + 1) - 8 * 3600_000;
+  const endMs = tomorrowTpMidnightUtcMs + 86_400_000;
+  const todayYmd = taipeiYmd(Date.now());
+  const sendAtIso = new Date(tomorrowTpMidnightUtcMs - 86_400_000 + 18 * 3600_000).toISOString(); // 今天 18:00 台北
+
+  const rows = await db
+    .select({
+      id: schema.bookingRecords.id,
+      tenantUid: schema.bookingRecords.tenantUid,
+      tenantName: schema.bookingRecords.tenantName,
+      roomNumber: schema.bookingRecords.roomNumber,
+      address: schema.bookingRecords.address,
+      bookingTime: schema.bookingRecords.bookingTime,
+    })
+    .from(schema.bookingRecords)
+    .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
+    .where(
+      and(
+        eq(schema.bookingTemplates.contractAction, "退租"),
+        eq(schema.bookingRecords.status, "confirmed"),
+        gte(schema.bookingRecords.bookingTime, tomorrowTpMidnightUtcMs),
+        lt(schema.bookingRecords.bookingTime, endMs),
+      ),
+    );
+
+  let inserted = 0;
+  for (const b of rows) {
+    const bookingDate = taipeiYmd(b.bookingTime);
+    const vars = {
+      booking_id: b.id,
+      booking_date: bookingDate,
+      booking_time: taipeiHm(b.bookingTime),
+      tenant_name: b.tenantName || "",
+      room: b.roomNumber || "",
+    };
+    const r = await sbQuery<{ id: string }>(
+      `insert into outreach.schedule
+         (tenant_uid, tenant_name, room, property_name, rule_key, scheduled_date, status, send_at, source, vars, dedupe_key)
+       values ($1,$2,$3,$4,'checkout_d1',$5::date,'confirmed',$6::timestamptz,'booking',$7::jsonb,$8)
+       on conflict (dedupe_key) where dedupe_key is not null do nothing
+       returning id`,
+      [
+        b.tenantUid, b.tenantName || null, b.roomNumber || null, b.address || null,
+        todayYmd, sendAtIso, JSON.stringify(vars), `checkout_d1:${b.id}:${bookingDate}`,
+      ],
+    );
+    inserted += r.length;
+  }
+  console.log(`[outreach] scan-checkout: scanned ${rows.length}, inserted ${inserted}`);
+  return { ok: true, scanned: rows.length, inserted };
+}
+
+/** 投遞 API 核心：驗欄位 → 寫排程（source='api'、自動確認、去重碼擋重複）。 */
+export async function enqueueMessage(body: any): Promise<{ status: number; json: any }> {
+  if (!isSupabaseConfigured()) return { status: 503, json: { error: "SUPABASE_DB_URL not set" } };
+  const dedupeKey = String(body?.dedupeKey || "").trim();
+  if (!dedupeKey) return { status: 400, json: { error: "missing: dedupeKey" } };
+  const card = body?.card;
+  if (!card || typeof card !== "object") return { status: 400, json: { error: "missing/invalid: card（須為 LINE message 或 bubble JSON 物件）" } };
+  const uid = String(body?.to?.uid || "").trim();
+  const phone = String(body?.to?.phone || "").trim();
+  if ((!uid && !phone) || (uid && phone)) return { status: 400, json: { error: "to.uid 或 to.phone 擇一必填" } };
+  const sendAtMs = Date.parse(String(body?.sendAt || ""));
+  if (Number.isNaN(sendAtMs)) return { status: 400, json: { error: "missing/invalid: sendAt（ISO 時間，例 2026-06-15T10:00:00+08:00）" } };
+  const tag = String(body?.tag || "").trim();
+  if (!tag) return { status: 400, json: { error: "missing: tag" } };
+  const altText = body?.altText ? String(body.altText) : null;
+
+  const r = await sbQuery<{ id: string }>(
+    `insert into outreach.schedule
+       (tenant_uid, recipient_phone, scheduled_date, status, send_at, source, tag, card_override, alt_text, dedupe_key)
+     values ($1,$2,$3::date,'confirmed',$4::timestamptz,'api',$5,$6::jsonb,$7,$8)
+     on conflict (dedupe_key) where dedupe_key is not null do nothing
+     returning id`,
+    [
+      uid || null, phone || null, taipeiYmd(sendAtMs), new Date(sendAtMs).toISOString(),
+      tag, JSON.stringify(card), altText, dedupeKey,
+    ],
+  );
+  if (r.length) return { status: 200, json: { ok: true, id: r[0].id, deduped: false } };
+  const existing = await sbQuery<{ id: string }>(`select id from outreach.schedule where dedupe_key=$1`, [dedupeKey]);
+  return { status: 200, json: { ok: true, id: existing[0]?.id ?? null, deduped: true } };
 }
 
 /**
@@ -261,7 +421,8 @@ const SCHEDULE_COLS =
    to_char(contract_end_date,'YYYY-MM-DD') as contract_end_date,
    rule_key, to_char(scheduled_date,'YYYY-MM-DD') as scheduled_date,
    status, manually_edited, suppressed_reason, sent_at,
-   last_error, to_char(last_attempt_at,'YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count`;
+   last_error, to_char(last_attempt_at,'YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count,
+   source, tag, to_char(send_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as send_at`;
 
 export const outreachRouter = router({
   /** 後台是否已接上 Supabase（給前端顯示提示用） */
@@ -295,6 +456,8 @@ export const outreachRouter = router({
             .array(z.enum(["pending", "confirmed", "sent", "skipped", "cancelled", "suppressed"]))
             .optional(),
           ruleKey: z.string().optional(),
+          source: z.enum(["rule", "booking", "api"]).optional(),
+          tag: z.string().optional(),
           search: z.string().optional(),
           from: z.string().optional(),
           to: z.string().optional(),
@@ -317,6 +480,14 @@ export const outreachRouter = router({
       if (input?.ruleKey) {
         params.push(input.ruleKey);
         clauses.push(`rule_key = $${params.length}`);
+      }
+      if (input?.source) {
+        params.push(input.source);
+        clauses.push(`source = $${params.length}`);
+      }
+      if (input?.tag) {
+        params.push(input.tag);
+        clauses.push(`tag = $${params.length}`);
       }
       if (input?.search && input.search.trim()) {
         params.push(`%${input.search.trim()}%`);
@@ -604,6 +775,36 @@ export const outreachRouter = router({
       sets.push(`updated_at=now()`);
       await sbQuery(`update outreach.rule set ${sets.join(", ")} where key=$1`, params);
       return { ok: true };
+    }),
+
+  /** 未綁 UID 主客清單：有效合約但鏡像無 line_uid（可篩 N 天內到期，供人工聯繫到期詢問對象） */
+  listUnboundTenants: adminProcedure
+    .input(z.object({ expiringWithinDays: z.number().int().min(1).max(365).optional() }).optional())
+    .query(async ({ input }) => {
+      if (!isSupabaseConfigured()) return [];
+      const params: any[] = [];
+      let having = "";
+      if (input?.expiringWithinDays) {
+        params.push(input.expiringWithinDays);
+        having = `having max(tc.end_date) between current_date and current_date + make_interval(days => $${params.length})`;
+      }
+      return await sbQuery(
+        `select t.primary_name as tenant_name, t.primary_phone as phone,
+                p.short_name as property_name, coalesce(u.unit_no, u.room_code) as room,
+                to_char(max(tc.end_date),'YYYY-MM-DD') as contract_end_date
+           from contract.tenants t
+           join contract.tenant_contract_parties tcp on tcp.tenant_id = t.id
+           join contract.tenant_contracts tc on tc.id = tcp.tenant_contract_id
+                and tc.status = 'active' and tc.deleted_at is null
+           join property.properties p on p.id = tc.property_id
+           left join property.units u on u.id = tc.unit_id
+          where (t.line_uid is null or t.line_uid = '')
+          group by t.id, t.primary_name, t.primary_phone, p.short_name, coalesce(u.unit_no, u.room_code)
+          ${having}
+          order by max(tc.end_date) asc nulls last
+          limit 2000`,
+        params,
+      );
     }),
 
   /** 取得設定（篩選集合 + 派送設定；run_secret 不回傳明文，只回是否已設定） */

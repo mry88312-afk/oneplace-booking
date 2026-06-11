@@ -235,7 +235,10 @@ export default function BookingPublic() {
       }
       phoneRetryRef.current = 0;
       setIsVerifying(false);
-      if (err.message === "PHONE_NOT_FOUND") toast.error("查無資料，請與我們聯繫");
+      if (err.message === "PHONE_NOT_FOUND") {
+        toast.info("查無資料，請填寫基本資料完成註冊後即可繼續預約");
+        setView("register");
+      }
       else if (isUnavailable) toast.error("服務暖機中，請稍後重新開啟連結");
       else toast.error(err.message || "查詢失敗");
     },
@@ -243,9 +246,10 @@ export default function BookingPublic() {
 
   const registerMutation = trpc.booking.registerTenantByPhone.useMutation({
     onSuccess: (data) => {
-      setTenantName(data.tenantName); setRoomNumber(data.roomNumber || "");
-      setPropertyName(data.propertyName || ""); setAddress(data.address || "");
-      if (data.isNewRecord) toast.success("已為您建立資料，請繼續預約");
+      // 後端只回 {success, ragicId}；顯示資料直接用使用者剛填的欄位
+      setTenantName(nameInput.trim()); setRoomNumber(roomInput.trim());
+      setPropertyName(""); setAddress(locationInput.trim());
+      if (data.success) toast.success("已為您建立資料，請繼續預約");
       setVerifiedPhone(phoneInput.trim());
       if (needsRemittance(template) && !remittanceDone) {
         setView("remittance");
@@ -404,7 +408,7 @@ export default function BookingPublic() {
     if (!locationInput.trim()) return toast.error("請輸入居住位置");
     if (!roomInput.trim()) return toast.error("請輸入房間");
     setIsVerifying(true);
-    registerMutation.mutate({ projectId, phone, name: nameInput.trim(), uid: lineUserId || uidFromUrl || undefined, location: locationInput.trim(), room: roomInput.trim() });
+    registerMutation.mutate({ projectId, phone, name: nameInput.trim(), uid: lineUserId || uidFromUrl || undefined, location: locationInput.trim(), roomNumber: roomInput.trim() });
   };
 
   const handleSelectDate = (date: string) => { setSelectedDate(date); setSelectedSlot(null); setConfirmedSlot(null); setView("slots"); };

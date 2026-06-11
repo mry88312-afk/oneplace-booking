@@ -100,6 +100,46 @@ async function startServer() {
     }
   });
 
+  // 退租提醒掃描：pg_cron 每日台北 17:00 呼叫；掃明天退租預約 → 排今天 18:00 提醒。需共享密鑰。
+  app.post("/api/outreach/scan-checkout", async (req, res) => {
+    const expected = process.env.OUTREACH_RUN_SECRET;
+    if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
+    const got = String(req.header("x-outreach-secret") || "");
+    const a = Buffer.from(got);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    try {
+      const { scanCheckoutReminders } = await import("./routers/property/outreachHandlers");
+      const result = await scanCheckoutReminders();
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[outreach] scan-checkout error:", err?.message || err);
+      return res.status(500).json({ error: err?.message || "error" });
+    }
+  });
+
+  // 投遞 API：外部系統（Ragic/MANUS 等）把卡片排進統一發訊中樞。需共享密鑰；去重碼擋重複。
+  app.post("/api/outreach/enqueue", async (req, res) => {
+    const expected = process.env.OUTREACH_RUN_SECRET;
+    if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
+    const got = String(req.header("x-outreach-secret") || "");
+    const a = Buffer.from(got);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    try {
+      const { enqueueMessage } = await import("./routers/property/outreachHandlers");
+      const r = await enqueueMessage(req.body || {});
+      return res.status(r.status).json(r.json);
+    } catch (err: any) {
+      console.error("[outreach] enqueue error:", err?.message || err);
+      return res.status(500).json({ error: err?.message || "error" });
+    }
+  });
+
   // 週期詢問互動回饋：入住卡按鈕「開啟連結」打到這裡（公開頁、不經 LINE webhook / MANUS）。
   // GET /f/:id?r=ok   → 記「住得舒服」+ 謝謝頁
   // GET /f/:id?r=help → 顯示後台可編輯的小問卷
