@@ -443,8 +443,9 @@ const SCHEDULE_COLS =
   `id, tenant_uid, tenant_name, room, property_name, contract_no,
    to_char(contract_end_date,'YYYY-MM-DD') as contract_end_date,
    rule_key, to_char(scheduled_date,'YYYY-MM-DD') as scheduled_date,
-   status, manually_edited, suppressed_reason, sent_at,
-   last_error, to_char(last_attempt_at,'YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count,
+   status, manually_edited, suppressed_reason,
+   to_char(sent_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as sent_at,
+   last_error, to_char(last_attempt_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count,
    source, tag, to_char(send_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as send_at`;
 
 export const outreachRouter = router({
