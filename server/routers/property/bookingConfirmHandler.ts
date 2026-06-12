@@ -562,11 +562,14 @@ export async function handleConfirmBooking(
       };
 
       if (isRenewal) {
-        // 續約：依序直推 確認卡 → 節點說明卡 →（入住非一人才）JGB 簽約提醒卡
-        const occN = parseInt(String(input.formAnswers?.["入住人數"] || "").trim(), 10);
-        const cards: any[] = [flexMessage, buildRenewalNodeCard(template.templateType)];
-        // 入住人數 > 1 才加發 JGB 雙人入住說明卡
-        if (!isNaN(occN) && occN > 1) cards.push(buildJgbCard(`${occN} 人`));
+        // 確認卡一律發；「續約流程」節點卡 +（入住>1）JGB 簽約卡只在「線上續約」(/book/renewal) 發。
+        // 線下續約 (/book/contract) 不走 JGB 線上簽署流程 → 只發確認卡，不發節點卡/JGB卡。
+        const cards: any[] = [flexMessage];
+        if (template.projectId === "renewal") {
+          cards.push(buildRenewalNodeCard(template.templateType));
+          const occN = parseInt(String(input.formAnswers?.["入住人數"] || "").trim(), 10);
+          if (!isNaN(occN) && occN > 1) cards.push(buildJgbCard(`${occN} 人`));
+        }
         (async () => {
           for (const c of cards) {
             const r = await pushLineDirect(input.uid, c);
