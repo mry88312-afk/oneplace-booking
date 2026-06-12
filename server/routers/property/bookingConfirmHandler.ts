@@ -57,7 +57,7 @@ function buildRenewalNodeCard(_templateType: string) {
   const steps: Step[] = [
     { icon: "✅", title: "更新個人資料・取得虛擬帳號", done: true },
     { icon: "✅", title: "預約續約專員時段", done: true },
-    { icon: "③", title: "專員準備續約租金租期確認書與 JGB 簽約連結", desc: "準備完成後會把連結傳給您" },
+    { icon: "③", title: "專員準備 JGB 合約，並提供連結", desc: "準備完成後會把連結傳給您" },
     {
       icon: "④", title: "在 JGB 線上完成簽署",
       subs: ["點開要簽署的合約", "填寫簽約資料", "前往簽名欄，簽名 3 次", "送出給一方"],
