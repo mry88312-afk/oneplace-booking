@@ -12,7 +12,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Loader2, Plus, Trash2, Upload, Eye, Send, Star, UserPlus, RefreshCw, Image as ImageIcon } from "lucide-react";
+import { Loader2, Plus, Trash2, Upload, Eye, Send, Star, UserPlus, RefreshCw, Image as ImageIcon, Wand2 } from "lucide-react";
+import { RichMenuGenerator } from "./RichMenuGenerator";
 
 type AreaForm = {
   x: number; y: number; width: number; height: number;
@@ -68,6 +69,7 @@ export function RichMenuManager() {
   const [preview, setPreview] = useState<any>(null);
   const [assignFor, setAssignFor] = useState<string | null>(null);
   const [assignUid, setAssignUid] = useState("");
+  const [genOpen, setGenOpen] = useState(false);
 
   const busy = upsert.isPending || publish.isPending || setDefault.isPending || del.isPending || assign.isPending || reconcile.isPending;
   const refresh = () => utils.messaging.listRichMenus.invalidate();
@@ -172,6 +174,7 @@ export function RichMenuManager() {
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => refresh()}><RefreshCw className="h-4 w-4 mr-1" /> 重新整理</Button>
           <Button variant="outline" size="sm" onClick={doReconcile} disabled={busy}>清孤兒</Button>
+          <Button size="sm" variant="outline" onClick={() => setGenOpen(true)}><Wand2 className="h-4 w-4 mr-1" /> 範本產生器</Button>
           <Button size="sm" onClick={openNew}><Plus className="h-4 w-4 mr-1" /> 新增選單</Button>
         </div>
       </div>
@@ -325,6 +328,8 @@ export function RichMenuManager() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <RichMenuGenerator open={genOpen} onClose={() => setGenOpen(false)} onDone={refresh} />
     </div>
   );
 }
