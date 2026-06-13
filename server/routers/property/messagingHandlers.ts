@@ -35,7 +35,8 @@ async function storageUpload(path: string, bytes: Buffer, contentType: string): 
   assertStorage();
   const resp = await fetch(`${sbUrl()}/storage/v1/object/${BUCKET}/${path}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${sbKey()}`, "Content-Type": contentType, "x-upsert": "true" },
+    // 同時帶 apikey + Authorization：相容舊 service_role JWT 與新版 sb_secret_ 金鑰
+    headers: { apikey: sbKey() as string, Authorization: `Bearer ${sbKey()}`, "Content-Type": contentType, "x-upsert": "true" },
     body: bytes as any,
     signal: AbortSignal.timeout(20000),
   });

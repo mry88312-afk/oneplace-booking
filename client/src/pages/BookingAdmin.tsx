@@ -19,6 +19,7 @@ import {
 import { RoutingRuleEditor, TimeSelect, FormFieldEditor, BookingRecordsPanel } from "./BookingAdmin/index";
 import type { RoutingRule, FormFieldDef } from "./BookingAdmin/index";
 import { OutreachBoard } from "./BookingAdmin/OutreachBoard";
+import { RichMenuManager } from "./BookingAdmin/RichMenuManager";
 
 // ─── 常數 ───────────────────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ const STEPS = [
 // ─── 主頁面 ──────────────────────────────────────────────────────────────────────
 
 export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
-  const [view, setView] = useState<"templates" | "outreach">("templates");
+  const [view, setView] = useState<"templates" | "outreach" | "richmenu">("templates");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
@@ -316,6 +317,10 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${view === "outreach" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             週期詢問
           </button>
+          <button type="button" onClick={() => setView("richmenu")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${view === "richmenu" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+            圖文選單
+          </button>
         </div>
 
         {/* 模版列表 */}
@@ -370,6 +375,7 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
         ))}
 
         {view === "outreach" && <OutreachBoard />}
+        {view === "richmenu" && <RichMenuManager />}
 
         {/* 建立/編輯 Dialog */}
         <Dialog open={showCreateDialog} onOpenChange={(v) => { if (!v) { setShowCreateDialog(false); setEditingId(null); resetForm(); } }}>
