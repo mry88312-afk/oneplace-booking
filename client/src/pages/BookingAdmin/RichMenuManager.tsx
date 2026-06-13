@@ -80,7 +80,7 @@ export function RichMenuManager() {
     setIsNew(false);
     setEditing({
       key: m.key, name: m.name, chatBarText: m.chat_bar_text, size: m.size, selected: !!m.selected,
-      imageAssetId: m.image_asset_id, imageUrl: m.image_url, aliasId: m.alias_id || m.key,
+      imageAssetId: m.image_asset_id == null ? null : Number(m.image_asset_id), imageUrl: m.image_url, aliasId: m.alias_id || m.key,
       areas: (m.areas || []).map((a: any) => ({
         x: a.x, y: a.y, width: a.width, height: a.height, actionType: a.action_type,
         uri: a.action_payload?.uri, label: a.label || a.action_payload?.label,

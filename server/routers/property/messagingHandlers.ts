@@ -111,7 +111,7 @@ export const messagingRouter = router({
          values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
         [path, publicUrl, input.kind, input.contentType, input.width ?? null, input.height ?? null, buf.length, "admin"],
       );
-      return { assetId: rows[0].id, publicUrl };
+      return { assetId: Number(rows[0].id), publicUrl }; // bigint 經 pg 回傳是字串 → 轉 number
     }),
 
   listAssets: adminProcedure
@@ -151,7 +151,9 @@ export const messagingRouter = router({
         chatBarText: z.string().max(14).default("選單"),
         size: z.enum(["full", "half"]).default("full"),
         selected: z.boolean().default(true),
-        imageAssetId: z.number().int().positive().nullable().optional(),
+        imageAssetId: z
+          .preprocess((v) => (v === null || v === undefined || v === "" ? null : Number(v)), z.number().int().positive().nullable())
+          .optional(),
         aliasId: z.string().max(80).optional(),
         areas: z.array(areaInput).default([]),
       }),
