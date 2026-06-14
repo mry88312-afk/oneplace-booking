@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { Loader2, Plus, Trash2, Upload, Eye, Send, Star, UserPlus, RefreshCw, Image as ImageIcon, Wand2 } from "lucide-react";
-import { RichMenuGenerator } from "./RichMenuGenerator";
+import { RichMenuGenerator, renderRichMenuCanvas, exportImg, buildConfigAreas } from "./RichMenuGenerator";
 
 type AreaForm = {
   x: number; y: number; width: number; height: number;
@@ -62,6 +62,7 @@ export function RichMenuManager() {
   const assign = trpc.messaging.assignTenant.useMutation();
   const del = trpc.messaging.deleteRichMenu.useMutation();
   const reconcile = trpc.messaging.reconcile.useMutation();
+  const clearDefault = trpc.messaging.clearDefault.useMutation();
 
   const [editing, setEditing] = useState<MenuForm | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -70,8 +71,9 @@ export function RichMenuManager() {
   const [assignFor, setAssignFor] = useState<string | null>(null);
   const [assignUid, setAssignUid] = useState("");
   const [genOpen, setGenOpen] = useState(false);
+  const [genInitial, setGenInitial] = useState<any>(null);
 
-  const busy = upsert.isPending || publish.isPending || setDefault.isPending || del.isPending || assign.isPending || reconcile.isPending;
+  const busy = upsert.isPending || publish.isPending || setDefault.isPending || del.isPending || assign.isPending || reconcile.isPending || clearDefault.isPending || upload.isPending;
   const refresh = () => utils.messaging.listRichMenus.invalidate();
   const expectedH = editing?.size === "half" ? 843 : 1686;
 
@@ -161,6 +163,29 @@ export function RichMenuManager() {
     try { const r = await reconcile.mutateAsync(); toast.success(`reconcile 完成：清除 ${r.removed.length} 個孤兒選單（保留 ${r.keptTracked} 個）`); }
     catch (e: any) { toast.error(e?.message || "reconcile 失敗"); }
   };
+  const doClearDefault = async () => {
+    if (!window.confirm("撤銷「全體預設」選單？\n所有未被個別指派的租客將不再看到預設圖文選單（已指派給特定 UID 的人不受影響）。")) return;
+    try { await clearDefault.mutateAsync(); toast.success("已撤銷全體預設（只剩被指派的 UID 看得到）"); refresh(); }
+    catch (e: any) { toast.error(e?.message || "撤銷失敗"); }
+  };
+  const doReapplyAll = async () => {
+    const list = ((menusQ.data as any[]) || []).filter((m) => m.generator_config);
+    if (!list.length) { toast.error("沒有可套用的選單（缺產生器設定，請用產生器重建）"); return; }
+    if (!window.confirm(`用最新樣式重畫並重新發布 ${list.length} 張選單？`)) return;
+    try {
+      for (const m of list) {
+        const cfg = m.generator_config;
+        const canvas = document.createElement("canvas");
+        renderRichMenuCanvas(canvas, { color: cfg.color || "#2e4a36", tabA: cfg.tabA || "", tabB: cfg.tabB || "", active: parseInt(String(cfg.active ?? "0"), 10), size: cfg.size === "half" ? "half" : "full", buttons: cfg.buttons || [] });
+        const img = await exportImg(canvas);
+        const asset = await upload.mutateAsync({ filename: m.key + (img.contentType === "image/jpeg" ? ".jpg" : ".png"), contentType: img.contentType, dataBase64: img.dataBase64, kind: "richmenu_image", width: canvas.width, height: canvas.height });
+        await upsert.mutateAsync({ key: m.key, name: cfg.name || m.name, chatBarText: (cfg.chatBarText || cfg.name || m.name).slice(0, 14), size: cfg.size === "half" ? "half" : "full", selected: cfg.selected !== false, imageAssetId: asset.assetId, aliasId: m.key, areas: buildConfigAreas(cfg), generatorConfig: cfg });
+        await publish.mutateAsync({ key: m.key });
+      }
+      toast.success(`已用新樣式重畫並發布 ${list.length} 張`);
+      refresh();
+    } catch (e: any) { toast.error(e?.message || "套用失敗"); }
+  };
 
   const menus = menusQ.data || [];
 
@@ -174,7 +199,9 @@ export function RichMenuManager() {
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => refresh()}><RefreshCw className="h-4 w-4 mr-1" /> 重新整理</Button>
           <Button variant="outline" size="sm" onClick={doReconcile} disabled={busy}>清孤兒</Button>
-          <Button size="sm" variant="outline" onClick={() => setGenOpen(true)}><Wand2 className="h-4 w-4 mr-1" /> 範本產生器</Button>
+          <Button variant="outline" size="sm" className="text-red-600" onClick={doClearDefault} disabled={busy}>撤銷全體預設</Button>
+          <Button size="sm" variant="outline" onClick={doReapplyAll} disabled={busy}><Wand2 className="h-4 w-4 mr-1" /> 全部套新樣式並重發</Button>
+          <Button size="sm" variant="outline" onClick={() => { setGenInitial(null); setGenOpen(true); }}><Wand2 className="h-4 w-4 mr-1" /> 範本產生器</Button>
           <Button size="sm" onClick={openNew}><Plus className="h-4 w-4 mr-1" /> 新增選單</Button>
         </div>
       </div>
@@ -212,6 +239,7 @@ export function RichMenuManager() {
                 <Separator />
                 <div className="flex flex-wrap gap-1.5">
                   <Button size="sm" variant="outline" onClick={() => openEdit(m)}>編輯</Button>
+                  <Button size="sm" variant="outline" onClick={() => { setGenInitial(m.generator_config ? { ...m.generator_config, key: m.key } : { key: m.key, name: m.name, size: m.size }); setGenOpen(true); }}><Wand2 className="h-4 w-4 mr-1" /> 產生器</Button>
                   <Button size="sm" variant="outline" onClick={() => doPreview(m.key)}><Eye className="h-4 w-4 mr-1" /> 預覽</Button>
                   <Button size="sm" onClick={() => doPublish(m.key)} disabled={busy}><Send className="h-4 w-4 mr-1" /> 發布</Button>
                   <Button size="sm" variant="outline" onClick={() => doDefault(m.key)} disabled={busy}><Star className="h-4 w-4 mr-1" /> 設預設</Button>
@@ -329,7 +357,7 @@ export function RichMenuManager() {
         </DialogContent>
       </Dialog>
 
-      <RichMenuGenerator open={genOpen} onClose={() => setGenOpen(false)} onDone={refresh} />
+      <RichMenuGenerator open={genOpen} onClose={() => setGenOpen(false)} onDone={refresh} initial={genInitial} />
     </div>
   );
 }

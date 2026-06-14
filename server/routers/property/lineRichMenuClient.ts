@@ -32,6 +32,8 @@ export type LineArea = {
   bounds: { x: number; y: number; width: number; height: number };
   action:
     | { type: "uri"; label?: string; uri: string }
+    | { type: "message"; label?: string; text: string }
+    | { type: "postback"; label?: string; data: string; displayText?: string }
     | { type: "richmenuswitch"; richMenuAliasId: string; data: string };
 };
 
@@ -77,6 +79,15 @@ export async function listRichMenuIds(): Promise<string[]> {
 /** 設為全體預設選單。 */
 export async function setDefaultRichMenu(richMenuId: string): Promise<void> {
   await lineCall("POST", `/v2/bot/user/all/richmenu/${richMenuId}`);
+}
+/** 取消全體預設選單（撤銷）——之後未被個別指派的使用者就看不到任何預設選單。 */
+export async function cancelDefaultRichMenu(): Promise<void> {
+  await lineCall("DELETE", "/v2/bot/user/all/richmenu");
+}
+
+/** 用 replyToken 回覆（免費、不耗推播額度）。messages 為 LINE message 物件陣列；token 約 1 分鐘內有效、僅能用一次。 */
+export async function replyMessage(replyToken: string, messages: any[]): Promise<void> {
+  await lineCall("POST", "/v2/bot/message/reply", { replyToken, messages });
 }
 
 /** 指派／取消指派個別使用者（by LINE uid）。 */

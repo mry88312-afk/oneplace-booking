@@ -35,7 +35,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:3000",
+      // 本機 API 轉發目標；可用 API_PROXY 覆寫（避免與其他專案搶 3000）。預設 3000。
+      "/api": process.env.API_PROXY || "http://localhost:3000",
     },
   },
 });

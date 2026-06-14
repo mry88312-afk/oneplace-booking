@@ -48,13 +48,18 @@ async function storageUpload(path: string, bytes: Buffer, contentType: string): 
 }
 
 // ─── area 映射 ───────────────────────────────────────────────
-const AREA_ACTION_TYPES = ["uri", "richmenuswitch"] as const;
+const AREA_ACTION_TYPES = ["uri", "message", "postback", "richmenuswitch"] as const;
 
 function mapAreaToLine(a: any): LineArea {
   const bounds = { x: a.x, y: a.y, width: a.width, height: a.height };
   const p = a.action_payload || a.actionPayload || {};
-  if ((a.action_type || a.actionType) === "uri")
+  const t = a.action_type || a.actionType;
+  if (t === "uri")
     return { bounds, action: { type: "uri", label: a.label || p.label || undefined, uri: String(p.uri || "") } };
+  if (t === "message")
+    return { bounds, action: { type: "message", label: a.label || p.label || undefined, text: String(p.text || "") } };
+  if (t === "postback")
+    return { bounds, action: { type: "postback", label: a.label || p.label || undefined, data: String(p.data || ""), displayText: p.displayText ? String(p.displayText) : undefined } };
   return { bounds, action: { type: "richmenuswitch", richMenuAliasId: String(p.richMenuAliasId || ""), data: String(p.data || "switch") } };
 }
 function assembleLineMenu(m: any, areas: any[]): LineRichMenuObject {
@@ -98,10 +103,15 @@ export const messagingRouter = router({
       const buf = Buffer.from(raw, "base64");
       if (buf.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "圖片內容為空" });
       if (input.kind === "richmenu_image") {
+        // LINE 規範：JPEG/PNG、寬 800–2500、高 ≥250、長寬比(寬/高) ≥1.45、檔案 ≤1MB
         if (buf.length > 1024 * 1024)
           throw new TRPCError({ code: "BAD_REQUEST", message: `圖文選單圖片需 ≤1MB（目前 ${(buf.length / 1024 / 1024).toFixed(2)}MB）` });
-        if (input.width && input.height && !(input.width === 2500 && (input.height === 1686 || input.height === 843)))
-          throw new TRPCError({ code: "BAD_REQUEST", message: `圖文選單尺寸需為 2500x1686 或 2500x843（目前 ${input.width}x${input.height}）` });
+        if (input.width && input.height) {
+          const w = input.width, h = input.height;
+          if (w < 800 || w > 2500) throw new TRPCError({ code: "BAD_REQUEST", message: `圖文選單寬度需 800–2500（目前 ${w}）` });
+          if (h < 250) throw new TRPCError({ code: "BAD_REQUEST", message: `圖文選單高度需 ≥250（目前 ${h}）` });
+          if (w / h < 1.45) throw new TRPCError({ code: "BAD_REQUEST", message: `圖文選單長寬比(寬/高)需 ≥1.45（目前 ${(w / h).toFixed(2)}）` });
+        }
       }
       const safe = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
       const path = `${input.kind}/${randomUUID()}-${safe}`;
@@ -132,7 +142,7 @@ export const messagingRouter = router({
     assertDb();
     return sbQuery(
       `select rm.id, rm.key, rm.name, rm.chat_bar_text, rm.size, rm.selected, rm.image_asset_id,
-              rm.line_rich_menu_id, rm.status,
+              rm.line_rich_menu_id, rm.status, rm.generator_config,
               (select a.public_url from messaging.asset a where a.id = rm.image_asset_id) as image_url,
               coalesce((select json_agg(ar order by ar.sort_order, ar.id)
                           from messaging.rich_menu_area ar where ar.rich_menu_id = rm.id), '[]') as areas,
@@ -146,16 +156,17 @@ export const messagingRouter = router({
   upsertRichMenu: adminProcedure
     .input(
       z.object({
-        key: z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/, "key 僅能用英數、_、-"),
-        name: z.string().min(1).max(120),
-        chatBarText: z.string().max(14).default("選單"),
+        key: z.string().min(1).max(32).regex(/^[a-z0-9_-]+$/, "key 僅能小寫英數、_、-（≤32，會作為 LINE rich menu alias）"),
+        name: z.string().min(1).max(300),
+        chatBarText: z.string().min(1).max(14).default("選單"),
         size: z.enum(["full", "half"]).default("full"),
         selected: z.boolean().default(true),
         imageAssetId: z
           .preprocess((v) => (v === null || v === undefined || v === "" ? null : Number(v)), z.number().int().positive().nullable())
           .optional(),
-        aliasId: z.string().max(80).optional(),
-        areas: z.array(areaInput).default([]),
+        aliasId: z.string().min(1).max(32).regex(/^[a-z0-9_-]+$/, "alias 僅能小寫英數、_、-（≤32）").optional(),
+        areas: z.array(areaInput).max(20, "點擊區最多 20 個").default([]),
+        generatorConfig: z.any().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -166,13 +177,15 @@ export const messagingRouter = router({
       }
       // 編輯即視為需重新發布 → status 回 draft
       const up = await sbQuery<{ id: number }>(
-        `insert into messaging.rich_menu (key,name,chat_bar_text,size,selected,image_asset_id,status,updated_at)
-         values ($1,$2,$3,$4,$5,$6,'draft',now())
+        `insert into messaging.rich_menu (key,name,chat_bar_text,size,selected,image_asset_id,generator_config,status,updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7::jsonb,'draft',now())
          on conflict (key) do update set name=excluded.name, chat_bar_text=excluded.chat_bar_text,
            size=excluded.size, selected=excluded.selected, image_asset_id=excluded.image_asset_id,
+           generator_config=coalesce(excluded.generator_config, rich_menu.generator_config),
            status='draft', updated_at=now()
          returning id`,
-        [input.key, input.name, input.chatBarText, input.size, input.selected, input.imageAssetId ?? null],
+        [input.key, input.name, input.chatBarText, input.size, input.selected, input.imageAssetId ?? null,
+         input.generatorConfig ? JSON.stringify(input.generatorConfig) : null],
       );
       const menuId = up[0].id;
       await sbQuery(`delete from messaging.rich_menu_area where rich_menu_id=$1`, [menuId]);
@@ -225,7 +238,17 @@ export const messagingRouter = router({
       const contentType = asset.content_type === "image/jpeg" ? "image/jpeg" : "image/png";
 
       // 建新選單 → 上傳圖（失敗則清掉剛建的，不留半成品）
-      const newId = await line.createRichMenu(assembleLineMenu(m, areas));
+      // 過濾沒填或不合規的 uri 點擊區（LINE 要求 uri 須為 http/https/tel/line 開頭，否則回 400）
+      const validUri = (u: string) => /^(https?|tel|line):/i.test(u.trim());
+      const okArea = (a: any) => {
+        if (a.action_type === "uri") return validUri(String(a.action_payload?.uri || ""));
+        if (a.action_type === "message") return !!String(a.action_payload?.text || "").trim();
+        if (a.action_type === "postback") return !!String(a.action_payload?.data || "").trim();
+        return true; // richmenuswitch
+      };
+      const sendAreas = areas.filter(okArea);
+      if (sendAreas.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "沒有可用的點擊區（按鈕都沒填內容、也沒有切換頁）" });
+      const newId = await line.createRichMenu(assembleLineMenu(m, sendAreas));
       try {
         await line.uploadRichMenuImage(newId, bytes, contentType);
       } catch (e) {
@@ -265,6 +288,14 @@ export const messagingRouter = router({
       await sbQuery(`insert into messaging.rich_menu_assignment (scope, rich_menu_key, status) values ('default',$1,'active')`, [input.key]);
       return { ok: true };
     }),
+
+  // 撤銷：清除「全體預設」選單。已被個別指派(指派給特定 UID)的人不受影響、仍看得到。
+  clearDefault: adminProcedure.mutation(async () => {
+    assertDb();
+    await line.cancelDefaultRichMenu();
+    await sbQuery(`delete from messaging.rich_menu_assignment where scope='default'`);
+    return { ok: true };
+  }),
 
   assignTenant: adminProcedure
     .input(z.object({ uid: z.string().min(1), key: z.string() }))

@@ -140,6 +140,54 @@ async function startServer() {
     }
   });
 
+  // LINE 入站轉發接收：MANUS 收到 LINE 訊息後，把「圖文選單觸發」(▶ 開頭) 的 event 轉發到這裡。
+  // Header：x-inbound-secret（= OUTREACH_RUN_SECRET）；Body：{ events: [LINE event] } 或 { event: LINE event }。
+  app.post("/api/line/inbound", async (req, res) => {
+    const expected = process.env.OUTREACH_RUN_SECRET;
+    if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
+    const got = String(req.header("x-inbound-secret") || "");
+    const a = Buffer.from(got);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    try {
+      const body = req.body || {};
+      const events = Array.isArray(body.events) ? body.events : body.event ? [body.event] : [];
+      const { sbQuery, isSupabaseConfigured } = await import("./db/supabaseClient");
+      if (!isSupabaseConfigured()) return res.status(503).json({ error: "SUPABASE_DB_URL not set" });
+      let stored = 0;
+      for (const ev of events) {
+        const uid = ev?.source?.userId || null;
+        const type = ev?.type || null;
+        const text = ev?.message?.text ?? ev?.postback?.data ?? null;
+        const replyToken = ev?.replyToken || null;
+        try {
+          await sbQuery(
+            `insert into messaging.inbound_event (source, line_uid, event_type, text, reply_token, raw) values ('manus_forward',$1,$2,$3,$4,$5::jsonb)`,
+            [uid, type, text, replyToken, JSON.stringify(ev)],
+          );
+          stored++;
+        } catch (e: any) {
+          console.error("[line/inbound] store error:", e?.message);
+        }
+      }
+      // 路由 postback 查詢（data 以 mh: 開頭）→ 用 replyToken 免費回覆。best-effort，不影響 200。
+      let handled: { data: string; replied: boolean }[] = [];
+      try {
+        const { handleInboundEvents } = await import("./routers/property/lineInboundHandlers");
+        const r = await handleInboundEvents(events);
+        handled = r.map((h) => ({ data: h.data, replied: h.replied }));
+      } catch (e: any) {
+        console.error("[line/inbound] handle error:", e?.message || e);
+      }
+      return res.json({ ok: true, stored, handled });
+    } catch (err: any) {
+      console.error("[line/inbound] error:", err?.message || err);
+      return res.status(500).json({ error: err?.message || "error" });
+    }
+  });
+
   // 週期詢問互動回饋：入住卡按鈕「開啟連結」打到這裡（公開頁、不經 LINE webhook / MANUS）。
   // GET /f/:id?r=ok   → 記「住得舒服」+ 謝謝頁
   // GET /f/:id?r=help → 顯示後台可編輯的小問卷
