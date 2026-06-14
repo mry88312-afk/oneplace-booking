@@ -138,35 +138,58 @@ function buildFaq() {
 }
 
 // ── 路由 + 回覆 ──────────────────────────────────────────────
-export async function handleInboundEvents(events: any[]): Promise<{ data: string; replied: boolean; preview?: any }[]> {
-  const out: { data: string; replied: boolean; preview?: any }[] = [];
-  for (const ev of events) {
+export async function handleInboundEvents(
+  events: any[],
+  opts: { debug?: boolean } = {},
+): Promise<{ index: number; data: string; replied: boolean; reply_status: string; reply_error: string | null; matched: string | null; preview?: any }[]> {
+  const out: { index: number; data: string; replied: boolean; reply_status: string; reply_error: string | null; matched: string | null; preview?: any }[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
     if (ev?.type !== "postback") continue;
     const data = String(ev?.postback?.data || "");
     const uid: string | undefined = ev?.source?.userId;
     const replyToken: string | undefined = ev?.replyToken;
     if (!data.startsWith("mh:")) continue;
-    if (!isSupabaseConfigured()) { out.push({ data, replied: false }); continue; }
+    if (!isSupabaseConfigured()) { out.push({ index: i, data, replied: false, reply_status: "no_db", reply_error: null, matched: null }); continue; }
     let msg: any;
+    let matched: string | null = null;
+    let note: string | null = null; // 語意註記：tenant_not_found / query_error（即使有回覆友善訊息也記錄）
     try {
       const t = uid ? await getTenant(uid) : null;
       if (data === "mh:faq") msg = buildFaq();
-      else if (!t) msg = txt("找不到您的租客資料，請確認是否已綁定，或聯繫小幫手 🙏");
-      else if (data === "mh:contract") msg = await buildContract(t);
-      else if (data === "mh:va") msg = buildVA(t);
-      else if (data === "mh:rent") msg = await buildRent(t);
-      else if (data === "mh:repair") msg = await buildRepair(uid!, t.primary_name);
-      else continue;
+      else if (!t) { msg = txt("找不到您的租客資料，請確認是否已綁定，或聯繫小幫手 🙏"); note = "tenant_not_found"; }
+      else {
+        matched = t.primary_name || null;
+        if (data === "mh:contract") msg = await buildContract(t);
+        else if (data === "mh:va") msg = buildVA(t);
+        else if (data === "mh:rent") msg = await buildRent(t);
+        else if (data === "mh:repair") msg = await buildRepair(uid!, t.primary_name);
+        else continue;
+      }
     } catch (e: any) {
       console.error("[inbound] query error:", data, e?.message);
       msg = txt("查詢時發生問題，請稍後再試或聯繫小幫手 🙏");
+      note = "query_error: " + (e?.message || "");
     }
     let replied = false;
-    if (replyToken) {
-      try { await replyMessage(replyToken, [msg]); replied = true; }
-      catch (e: any) { console.error("[inbound] reply error:", e?.message); }
+    let reply_status: string;
+    let reply_error: string | null = note;
+    if (opts.debug) {
+      reply_status = "debug";
+    } else if (replyToken) {
+      try {
+        await replyMessage(replyToken, [msg]);
+        replied = true;
+        reply_status = "ok";
+      } catch (e: any) {
+        reply_status = "failed";
+        reply_error = e?.message || "reply error";
+        console.error("[inbound] reply error:", e?.message);
+      }
+    } else {
+      reply_status = "no_token";
     }
-    out.push({ data, replied, preview: msg });
+    out.push({ index: i, data, replied, reply_status, reply_error, matched, preview: msg });
   }
   return out;
 }

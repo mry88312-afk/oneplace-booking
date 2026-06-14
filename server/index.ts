@@ -156,32 +156,53 @@ async function startServer() {
       const events = Array.isArray(body.events) ? body.events : body.event ? [body.event] : [];
       const { sbQuery, isSupabaseConfigured } = await import("./db/supabaseClient");
       if (!isSupabaseConfigured()) return res.status(503).json({ error: "SUPABASE_DB_URL not set" });
+      // debug=true（或 ?debug=1）：不實際 reply，改回傳「會送出的卡片」preview，供 prod 上隨時驗查詢結果。
+      const debug = body.debug === true || req.query?.debug === "1";
       let stored = 0;
+      const ids: (number | null)[] = [];
       for (const ev of events) {
         const uid = ev?.source?.userId || null;
         const type = ev?.type || null;
         const text = ev?.message?.text ?? ev?.postback?.data ?? null;
         const replyToken = ev?.replyToken || null;
         try {
-          await sbQuery(
-            `insert into messaging.inbound_event (source, line_uid, event_type, text, reply_token, raw) values ('manus_forward',$1,$2,$3,$4,$5::jsonb)`,
+          const rows = await sbQuery<any>(
+            `insert into messaging.inbound_event (source, line_uid, event_type, text, reply_token, raw) values ('manus_forward',$1,$2,$3,$4,$5::jsonb) returning id`,
             [uid, type, text, replyToken, JSON.stringify(ev)],
           );
+          ids.push(rows[0]?.id != null ? Number(rows[0].id) : null);
           stored++;
         } catch (e: any) {
+          ids.push(null);
           console.error("[line/inbound] store error:", e?.message);
         }
       }
-      // 路由 postback 查詢（data 以 mh: 開頭）→ 用 replyToken 免費回覆。best-effort，不影響 200。
-      let handled: { data: string; replied: boolean }[] = [];
+      // 路由 postback 查詢（data 以 mh: 開頭）→ reply（debug 時不 reply）。每筆回寫稽核結果到 inbound_event。
+      let handled: any[] = [];
       try {
         const { handleInboundEvents } = await import("./routers/property/lineInboundHandlers");
-        const r = await handleInboundEvents(events);
-        handled = r.map((h) => ({ data: h.data, replied: h.replied }));
+        const results = await handleInboundEvents(events, { debug });
+        for (const r of results) {
+          const id = ids[r.index];
+          if (id == null) continue;
+          try {
+            await sbQuery(
+              `update messaging.inbound_event set matched_tenant=$1, reply_status=$2, reply_error=$3, handled_at=now() where id=$4`,
+              [r.matched ?? null, r.reply_status, r.reply_error ?? null, id],
+            );
+          } catch (e: any) {
+            console.error("[line/inbound] audit update error:", e?.message);
+          }
+        }
+        handled = results.map((r) =>
+          debug
+            ? { data: r.data, matched: r.matched, status: r.reply_status, preview: r.preview }
+            : { data: r.data, matched: r.matched, replied: r.replied, status: r.reply_status, error: r.reply_error },
+        );
       } catch (e: any) {
         console.error("[line/inbound] handle error:", e?.message || e);
       }
-      return res.json({ ok: true, stored, handled });
+      return res.json({ ok: true, stored, debug, handled });
     } catch (err: any) {
       console.error("[line/inbound] error:", err?.message || err);
       return res.status(500).json({ error: err?.message || "error" });
