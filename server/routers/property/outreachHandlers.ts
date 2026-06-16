@@ -4,7 +4,7 @@
  * 大腦（Supabase）每日用 pg_cron 算出 outreach.schedule、並用 pg_net 把
  * 「已確認且到期」的 schedule_ids POST 到 /api/outreach/run。本檔負責：
  *   1) runOutreach()：發送前再用本地 booking_records 即時防重（stale-value race），
- *      渲染卡片變數、pushLineDirect、回寫 status。
+ *      渲染卡片變數、經 MANUS webhook 發送（失敗 fallback 直發 LINE）、回寫 status。
  *   2) tRPC adminProcedure：後台看板（列出/編輯/立即送）與規則編輯器、設定。
  *
  * 所有 Supabase 讀寫都在後端（SUPABASE_DB_URL），瀏覽器只打本服務 tRPC。
@@ -16,7 +16,7 @@ import { router, adminProcedure } from "../../_core/trpc";
 import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
-import { pushLineDirect } from "./bookingConfirmHandler";
+import { relayPush } from "./bookingConfirmHandler";
 
 type ScheduleRow = {
   id: string;
@@ -220,7 +220,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       if (redirect) {
         // 測試模式：改寄到測試 LINE、跳過防重、不改原排程狀態（可重複測、永不送真人）
         const tmsg = toFlexMessage(renderTemplate(card, computeVars(row)), "【測試】" + altText);
-        const tpush = await pushLineDirect(redirect, tmsg);
+        const tpush = await relayPush(redirect, tmsg, { record: false });
         if (tpush.success) result.sent++;
         else {
           result.failed++;
@@ -280,7 +280,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         continue;
       }
       const message = toFlexMessage(renderTemplate(card, computeVars(row)), altText);
-      const push = await pushLineDirect(targetUid, message);
+      const push = await relayPush(targetUid, message);
       if (push.success) {
         await sbQuery(
           `update outreach.schedule set status='sent', sent_at=now(), last_error=null, updated_at=now() where id=$1`,
@@ -432,7 +432,7 @@ export async function pushTestCard(
 ): Promise<{ success: boolean; error?: string }> {
   const rendered = vars && Object.keys(vars).length ? renderTemplate(card, vars) : card;
   const msg = toFlexMessage(rendered, altText || "測試卡片");
-  return await pushLineDirect(uid, msg);
+  return await relayPush(uid, msg, { record: false });
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -709,7 +709,7 @@ export const outreachRouter = router({
         renderTemplate(row.card_template, computeVars(row)),
         "【預覽】" + (RULE_ALT_TEXT[row.rule_key] || (row as any).rule_label || "一方生活通知"),
       );
-      const push = await pushLineDirect(redirect, msg);
+      const push = await relayPush(redirect, msg, { record: false });
       if (!push.success)
         throw new TRPCError({ code: "BAD_REQUEST", message: push.error || "預覽發送失敗" });
       return { ok: true, redirectedTo: redirect };

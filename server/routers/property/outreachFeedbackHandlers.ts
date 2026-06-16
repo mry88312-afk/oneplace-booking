@@ -11,7 +11,7 @@
  */
 import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
 import { ragicPost } from "./bookingHelpers";
-import { pushLineDirect } from "./bookingConfirmHandler";
+import { relayPush } from "./bookingConfirmHandler";
 
 /** Ragic「回饋單」表（go-back/75）欄位 ID（由使用者建立並提供）。 */
 const FB_SHEET = "go-back/75";
@@ -133,7 +133,7 @@ export async function notifyHelp(row: FeedbackRow, items: string[], note: string
     `時間：${nowTaipei()}\n請盡快聯繫關心 🙏`;
   for (const uid of notifyUids) {
     try {
-      await pushLineDirect(uid, { type: "text", text });
+      await relayPush(uid, { type: "text", text }, { record: false });
     } catch (e: any) {
       console.error(`[feedback] notify ${String(uid).slice(0, 8)}… failed: ${e?.message || e}`);
     }

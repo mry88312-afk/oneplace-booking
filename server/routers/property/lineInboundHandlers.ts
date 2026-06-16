@@ -5,7 +5,7 @@
  * 資料：合約/繳租帳號/報修 走 Supabase；繳租紀錄走 Ragic form 14（即時，by 虛擬帳號）。
  */
 import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
-import { replyMessage } from "./lineRichMenuClient";
+import { relayToLine } from "./bookingConfirmHandler";
 
 const GREEN = "#2e4a36";
 const RAGIC_BASE = "https://ap13.ragic.com/OnePlaceLiving";
@@ -177,14 +177,14 @@ export async function handleInboundEvents(
     if (opts.debug) {
       reply_status = "debug";
     } else if (replyToken) {
-      try {
-        await replyMessage(replyToken, [msg]);
+      const r = await relayToLine("reply", { replyToken, messages: [msg] }, { recordUid: uid });
+      if (r.success) {
         replied = true;
         reply_status = "ok";
-      } catch (e: any) {
+      } else {
         reply_status = "failed";
-        reply_error = e?.message || "reply error";
-        console.error("[inbound] reply error:", e?.message);
+        reply_error = r.error || "relay/reply failed";
+        console.error("[inbound] reply error:", r.error);
       }
     } else {
       reply_status = "no_token";

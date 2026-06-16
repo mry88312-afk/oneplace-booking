@@ -12,7 +12,7 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPut, ragicDelete, ragicExecuteButton } from "./bookingHelpers";
-import { pushLineDirect } from "./bookingConfirmHandler";
+import { relayPush } from "./bookingConfirmHandler";
 
 // ─── LINE 卡片小工具（取消 / 變更後通知）──────────────────────────────────
 
@@ -178,7 +178,7 @@ export async function handleCancelBookingPublic(input: { bookingId: number; uid:
       ...(record.roomNumber ? [{ label: "房間", value: record.roomNumber }] : []),
       { label: "原時間", value: `${p.dateStr}（${p.weekday}）${p.timeStr}` },
     ];
-    pushLineDirect(
+    relayPush(
       record.tenantUid,
       buildSimpleCard({
         title: `已取消${template.templateType}`,
@@ -258,7 +258,7 @@ export async function handleRescheduleBooking(input: {
       { label: "新時間", value: `${s.timeStr} - ${e.timeStr}` },
       { label: "負責人", value: input.assigneeName },
     ];
-    pushLineDirect(
+    relayPush(
       record.tenantUid,
       buildSimpleCard({
         title: "✅ 已更新預約時間",

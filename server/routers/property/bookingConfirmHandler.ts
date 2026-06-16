@@ -49,6 +49,80 @@ export async function pushLineDirect(
 }
 
 /**
+ * 直發 LINE（fallback 用）：把 payload 原封不動 POST 到 LINE 的 reply/push 端點。
+ */
+async function directLineSend(
+  lineEndpoint: "reply" | "push",
+  payload: any,
+): Promise<{ success: boolean; error?: string }> {
+  const token = process.env.LINE_MESSAGING_TENANT_ACCESS_TOKEN;
+  if (!token) return { success: false, error: "LINE_MESSAGING_TENANT_ACCESS_TOKEN not set" };
+  try {
+    const resp = await fetch(`https://api.line.me/v2/bot/message/${lineEndpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return { success: false, error: `LINE ${lineEndpoint} ${resp.status}: ${text.slice(0, 200)}` };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * 統一送訊：所有對外 LINE 訊息（push / reply）都走這裡。
+ * 優先 POST 到 MANUS 通用代發 relay（MANUS_LINE_RELAY_URL，MANUS 原樣轉給 LINE + 記錄客服聊天）；
+ * relay 未設定 / 失敗時 fallback 直發 LINE（保命；那幾則客服不會在 MANUS 看到）。
+ * payload = 原封不動要送 LINE 的 body（push={to,messages}；reply={replyToken,messages}）。
+ * recordUid：給 MANUS 記錄客服聊天的對象；省略則 MANUS 不記錄（測試/內部通知用）。
+ */
+export async function relayToLine(
+  lineEndpoint: "reply" | "push",
+  payload: any,
+  opts?: { recordUid?: string },
+): Promise<{ success: boolean; error?: string; via?: string }> {
+  // relay 網址：優先用 MANUS_LINE_RELAY_URL；沒設則由 MAIN_SYSTEM_WEBHOOK_URL 同源推導 /api/line/relay
+  let relayUrl = process.env.MANUS_LINE_RELAY_URL;
+  if (!relayUrl && process.env.MAIN_SYSTEM_WEBHOOK_URL) {
+    try { relayUrl = new URL("/api/line/relay", process.env.MAIN_SYSTEM_WEBHOOK_URL).href; } catch {}
+  }
+  const secret = process.env.BOOKING_WEBHOOK_SECRET;
+  if (relayUrl && secret) {
+    try {
+      const resp = await fetch(relayUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
+        body: JSON.stringify({ lineEndpoint, payload, recordUid: opts?.recordUid }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (resp.ok) return { success: true, via: "manus_relay" };
+      const text = await resp.text().catch(() => "");
+      console.warn(`[relay] MANUS relay ${resp.status}: ${text.slice(0, 150)} → fallback 直發`);
+    } catch (err: any) {
+      console.warn(`[relay] MANUS relay 例外: ${err?.message} → fallback 直發`);
+    }
+  }
+  const fb = await directLineSend(lineEndpoint, payload);
+  return { success: fb.success, error: fb.error, via: fb.success ? "direct_fallback" : "failed" };
+}
+
+/** push 便捷包裝：送單張卡片給某 uid（預設記錄客服聊天；record:false 則不記，測試/內部通知用）。 */
+export async function relayPush(
+  uid: string,
+  flexMessage: any,
+  opts?: { record?: boolean },
+): Promise<{ success: boolean; error?: string; via?: string }> {
+  return relayToLine("push", { to: uid, messages: [flexMessage] }, {
+    recordUid: opts?.record === false ? undefined : uid,
+  });
+}
+
+/**
  * P26：續約「節點流程說明」卡（第二張）。預設樣式，後續可調整文案/節點。
  * 已完成的節點打勾，後續節點以待辦呈現。
  */
@@ -572,7 +646,7 @@ export async function handleConfirmBooking(
         }
         (async () => {
           for (const c of cards) {
-            const r = await pushLineDirect(input.uid, c);
+            const r = await relayPush(input.uid, c);
             if (!r.success) console.error("[Booking] 續約卡推送失敗:", r.error);
           }
         })().catch((e: any) => console.error("[Booking] 續約多卡推送例外:", e?.message));
