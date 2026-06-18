@@ -298,15 +298,27 @@ export const messagingRouter = router({
   }),
 
   assignTenant: adminProcedure
+    // uid 可一次帶多個（換行/逗號/分號/空白分隔）→ 同一張選單指派給多人（例：自己＋主管）
     .input(z.object({ uid: z.string().min(1), key: z.string() }))
     .mutation(async ({ input }) => {
       assertDb();
       const m = (await sbQuery<any>(`select line_rich_menu_id from messaging.rich_menu where key=$1`, [input.key]))[0];
       if (!m?.line_rich_menu_id) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "請先發布此選單再指派" });
-      await line.linkUserRichMenu(input.uid, m.line_rich_menu_id);
-      await sbQuery(`delete from messaging.rich_menu_assignment where scope='tenant' and tenant_uid=$1`, [input.uid]);
-      await sbQuery(`insert into messaging.rich_menu_assignment (scope, tenant_uid, rich_menu_key, status) values ('tenant',$1,$2,'active')`, [input.uid, input.key]);
-      return { ok: true };
+      const uids = [...new Set(input.uid.split(/[\s,;，、]+/).map((s) => s.trim()).filter(Boolean))];
+      if (!uids.length) throw new TRPCError({ code: "BAD_REQUEST", message: "請輸入至少一個 LINE UID" });
+      let linked = 0;
+      const failed: { uid: string; error: string }[] = [];
+      for (const uid of uids) {
+        try {
+          await line.linkUserRichMenu(uid, m.line_rich_menu_id);
+          await sbQuery(`delete from messaging.rich_menu_assignment where scope='tenant' and tenant_uid=$1`, [uid]);
+          await sbQuery(`insert into messaging.rich_menu_assignment (scope, tenant_uid, rich_menu_key, status) values ('tenant',$1,$2,'active')`, [uid, input.key]);
+          linked++;
+        } catch (e: any) {
+          failed.push({ uid, error: e?.message || String(e) });
+        }
+      }
+      return { ok: failed.length === 0, linked, failed };
     }),
 
   unassignTenant: adminProcedure

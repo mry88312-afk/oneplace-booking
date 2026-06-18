@@ -3,6 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -156,8 +157,11 @@ export function RichMenuManager() {
   };
   const doAssign = async () => {
     if (!assignFor || !assignUid.trim()) return;
-    try { await assign.mutateAsync({ key: assignFor, uid: assignUid.trim() }); toast.success("已指派給該租客"); setAssignFor(null); setAssignUid(""); refresh(); }
-    catch (e: any) { toast.error(e?.message || "指派失敗"); }
+    try {
+      const r: any = await assign.mutateAsync({ key: assignFor, uid: assignUid.trim() });
+      if (r?.failed?.length) { toast.error(`已指派 ${r.linked} 人；${r.failed.length} 個失敗（UID 無效或未加官方帳號好友）`); refresh(); return; }
+      toast.success(`已指派給 ${r?.linked ?? 0} 人`); setAssignFor(null); setAssignUid(""); refresh();
+    } catch (e: any) { toast.error(e?.message || "指派失敗"); }
   };
   const doReconcile = async () => {
     try { const r = await reconcile.mutateAsync(); toast.success(`reconcile 完成：清除 ${r.removed.length} 個孤兒選單（保留 ${r.keptTracked} 個）`); }
@@ -348,8 +352,8 @@ export function RichMenuManager() {
       {/* 指派 dialog */}
       <Dialog open={!!assignFor} onOpenChange={(o) => !o && setAssignFor(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>指派給個別租客</DialogTitle><DialogDescription>輸入該租客的 LINE UID，覆蓋預設選單。</DialogDescription></DialogHeader>
-          <div><Label>LINE UID</Label><Input value={assignUid} onChange={(e) => setAssignUid(e.target.value)} placeholder="U xxxxxxxx…" /></div>
+          <DialogHeader><DialogTitle>指派給個別租客</DialogTitle><DialogDescription>輸入 LINE UID，覆蓋預設選單。可一次多個（一行一個或逗號分隔）——例如自己＋主管一起看。</DialogDescription></DialogHeader>
+          <div><Label>LINE UID（可多個）</Label><Textarea value={assignUid} onChange={(e) => setAssignUid(e.target.value)} placeholder={"一行一個，例如：\nUeda10076fcd09a461bd49847da96447c\nU主管的UID…"} rows={4} /></div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAssignFor(null)}>取消</Button>
             <Button onClick={doAssign} disabled={assign.isPending || !assignUid.trim()}>{assign.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} 指派</Button>

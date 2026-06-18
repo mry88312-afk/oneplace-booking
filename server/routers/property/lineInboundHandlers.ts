@@ -43,12 +43,18 @@ function bubble(title: string, bodyContents: any[], altText: string) {
 }
 function txt(t: string) { return { type: "text", text: t }; }
 const money = (n: any) => (n == null || n === "" ? "—" : "$" + Number(n).toLocaleString("en-US"));
+// payment_method = 繳費月數：1月/3季/6半年/12年；其餘＝每 N 個月繳
+const payCycle = (n: any) => {
+  const m = Number(n);
+  if (!m) return null;
+  return (({ 1: "月繳", 3: "季繳", 6: "半年繳", 12: "年繳" } as Record<number, string>)[m]) || `每 ${m} 個月繳`;
+};
 
 // ── 查詢 ─────────────────────────────────────────────────────
 async function buildContract(t: Tenant) {
   const cs = await sbQuery<any>(
     `select tc.contract_no, to_char(tc.start_date,'YYYY-MM-DD') s, to_char(tc.end_date,'YYYY-MM-DD') e,
-            tc.monthly_rent, tc.status, p.short_name property, u.unit_no room
+            tc.monthly_rent, tc.payment_method, tc.status, p.short_name property, u.unit_no room
        from contract.tenant_contract_parties pa
        join contract.tenant_contracts tc on tc.id = pa.tenant_contract_id
        left join property.properties p on p.id = tc.property_id
@@ -65,6 +71,8 @@ async function buildContract(t: Tenant) {
     blocks.push(row("房間", c.room));
     blocks.push(row("租期", `${c.s || "?"} ~ ${c.e || "?"}`));
     blocks.push(row("租金", c.monthly_rent ? money(c.monthly_rent) + "/月" : "—"));
+    const cyc = payCycle(c.payment_method);
+    if (cyc) blocks.push(row("繳費方式", cyc));
     blocks.push(row("合約編號", c.contract_no));
   });
   return bubble("📄 我的合約", blocks, "合約查詢");
@@ -72,11 +80,13 @@ async function buildContract(t: Tenant) {
 
 function buildVA(t: Tenant) {
   if (!t.virtual_account) return txt(`${t.primary_name} 您好，系統尚未有您的專屬繳租帳號，請聯繫小幫手協助 🙏`);
-  return bubble("🏦 繳租帳號（中國信託）", [
-    { type: "text", text: t.virtual_account, weight: "bold", size: "xxl", align: "center", color: GREEN },
-    { type: "text", text: "銀行代碼 822 中國信託", size: "sm", color: "#999999", align: "center", margin: "md" },
-    { type: "text", text: "每月以此固定虛擬帳號繳交租金即可。", size: "xs", color: "#999999", align: "center", wrap: true, margin: "sm" },
-  ], "繳租帳號：" + t.virtual_account);
+  return bubble("🏦 繳租帳號", [
+    { type: "text", text: "中國信託（822）復北分行", size: "sm", color: "#666666", align: "center" },
+    { type: "text", text: t.virtual_account, weight: "bold", size: "xxl", align: "center", color: GREEN, margin: "sm" },
+    { type: "button", style: "primary", color: GREEN, height: "sm", margin: "lg",
+      action: { type: "clipboard", label: "📋 複製帳號", clipboardText: t.virtual_account } },
+    { type: "text", text: "每月以此固定虛擬帳號繳交租金即可。", size: "xs", color: "#999999", align: "center", wrap: true, margin: "md" },
+  ], "繳租帳號 中國信託822 復北分行：" + t.virtual_account);
 }
 
 async function buildRent(t: Tenant) {
@@ -91,7 +101,7 @@ async function buildRent(t: Tenant) {
       const d: any = await resp.json();
       rows = Object.values(d)
         .filter((r: any) => r && typeof r === "object" && r["1022234"])
-        .map((r: any) => ({ amount: r["1022235"], date: r["1022237"] || r["1022238"] }))
+        .map((r: any) => ({ amount: r["1022235"], date: r["1022237"] || r["1022238"], time: r["1022239"] }))
         .sort((a, b) => String(b.date).localeCompare(String(a.date)))
         .slice(0, 8);
     }
@@ -99,10 +109,16 @@ async function buildRent(t: Tenant) {
     console.error("[inbound] ragic rent error:", e?.message);
     return txt("查詢繳費紀錄時連線逾時，請稍後再試 🙏");
   }
-  if (!rows.length) return txt(`${t.primary_name} 您好，目前查不到繳費入帳紀錄。`);
-  const blocks: any[] = rows.map((r) => row(String(r.date || "—"), money(r.amount)));
-  blocks.unshift({ type: "text", text: "近期入帳紀錄", size: "xs", color: "#999999" });
-  return bubble("💰 繳租紀錄", blocks, "繳租紀錄");
+  if (!rows.length) return txt(`${t.primary_name} 您好，目前查不到匯款入帳紀錄。`);
+  const blocks: any[] = rows.map((r) => ({
+    type: "box", layout: "horizontal", spacing: "sm",
+    contents: [
+      { type: "text", text: `${r.date || "—"}${r.time ? "  " + r.time : ""}`, size: "sm", color: "#555555", flex: 5, wrap: true },
+      { type: "text", text: money(r.amount), size: "sm", color: GREEN, weight: "bold", align: "end", flex: 3 },
+    ],
+  }));
+  blocks.unshift({ type: "text", text: "近期入帳（日期・時間・金額）", size: "xs", color: "#999999" });
+  return bubble("💰 室友匯款紀錄", blocks, "室友匯款紀錄");
 }
 
 async function buildRepair(uid: string, name: string) {

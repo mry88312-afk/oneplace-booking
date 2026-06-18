@@ -55,11 +55,12 @@ function lineIcon(g: CanvasRenderingContext2D, type: string, cx: number, cy: num
 }
 function iconFor(lab: string) {
   lab = lab || "";
-  if (/繳租|繳費|付款|帳單/.test(lab)) return "pay";
+  if (/帳號/.test(lab)) return "doc";                                  // 繳租帳號/虛擬帳號 → 文件
+  if (/繳租|繳費|付款|帳單|匯款|轉帳/.test(lab)) return "pay";          // 繳租/匯款紀錄 → $
   if (/合約|簽約/.test(lab)) return "doc";
   if (/修繕|維修|報修|記錄|紀錄|查詢/.test(lab)) return "list";
   if (/地圖|找房|看房|位置|聯絡|專員/.test(lab)) return "pin";
-  if (/好物|推薦|優惠|精選/.test(lab)) return "star";
+  if (/好物|推薦|優惠|精選|團購|社群|社團/.test(lab)) return "star";   // 團購社群 → 星星
   if (/品牌|公司|關於|問題|常見/i.test(lab)) return "building";
   return "dot";
 }
