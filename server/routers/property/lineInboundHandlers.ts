@@ -80,13 +80,14 @@ async function buildContract(t: Tenant) {
 
 function buildVA(t: Tenant) {
   if (!t.virtual_account) return txt(`${t.primary_name} 您好，系統尚未有您的專屬繳租帳號，請聯繫小幫手協助 🙏`);
+  const acct = "822-" + t.virtual_account;
   return bubble("🏦 繳租帳號", [
-    { type: "text", text: "中國信託（822）復北分行", size: "sm", color: "#666666", align: "center" },
-    { type: "text", text: t.virtual_account, weight: "bold", size: "xxl", align: "center", color: GREEN, margin: "sm" },
+    { type: "text", text: "中國信託 復北分行", size: "sm", color: "#666666", align: "center" },
+    { type: "text", text: acct, weight: "bold", size: "xl", align: "center", color: GREEN, margin: "sm", adjustMode: "shrink-to-fit" },
     { type: "button", style: "primary", color: GREEN, height: "sm", margin: "lg",
-      action: { type: "clipboard", label: "📋 複製帳號", clipboardText: t.virtual_account } },
-    { type: "text", text: "每月以此固定虛擬帳號繳交租金即可。", size: "xs", color: "#999999", align: "center", wrap: true, margin: "md" },
-  ], "繳租帳號 中國信託822 復北分行：" + t.virtual_account);
+      action: { type: "clipboard", label: "📋 複製帳號", clipboardText: acct } },
+    { type: "text", text: "（822＝中國信託）每月以此帳號繳交租金即可。", size: "xs", color: "#999999", align: "center", wrap: true, margin: "md" },
+  ], "繳租帳號：" + acct);
 }
 
 async function buildRent(t: Tenant) {

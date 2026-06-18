@@ -81,11 +81,12 @@ export function exportImg(cv: HTMLCanvasElement): Promise<{ dataBase64: string; 
 /** 共用的選單繪圖（產生器預覽 + 一鍵重套用都用這個，確保樣式一致）。 */
 export function renderRichMenuCanvas(
   canvas: HTMLCanvasElement,
-  opts: { color: string; tabA: string; tabB: string; active: number; size: "full" | "half"; buttons: { id?: number; label: string; icon?: string }[]; imgs?: Record<number, HTMLImageElement> },
+  opts: { color: string; tabA: string; tabB: string; active: number; size: "full" | "half"; buttons: { id?: number; label: string; icon?: string }[]; imgs?: Record<number, HTMLImageElement>; showIcon?: boolean },
 ) {
   const { color, active, size } = opts;
   const buttons = opts.buttons || [];
   const imgs = opts.imgs || {};
+  const showIcon = opts.showIcon !== false;
   const { W, H, tabH, cells } = layout(size, Math.max(1, buttons.length));
   canvas.width = W; canvas.height = H;
   const g = canvas.getContext("2d"); if (!g) return;
@@ -104,17 +105,19 @@ export function renderRichMenuCanvas(
     const iconS = Math.min(150, c.h * 0.30, c.w * 0.46), labelF = Math.max(46, Math.min(100, Math.round(c.h * 0.18)));
     g.save(); g.shadowColor = "rgba(0,0,0,0.20)"; g.shadowBlur = Math.round(c.h * 0.06); g.shadowOffsetY = Math.round(c.h * 0.03);
     g.fillStyle = "#ffffff"; rr(g, c.x + pad, c.y + pad, c.w - 2 * pad, c.h - 2 * pad, rad); g.fill(); g.restore();
-    const iconCy = c.y + c.h / 2 - c.h * 0.16;
-    const im = b.id != null ? imgs[b.id] : undefined;
-    if (b.icon && im && im.complete && im.naturalWidth) {
-      const ar = im.naturalWidth / im.naturalHeight; let w = iconS, h = iconS;
-      if (ar > 1) h = iconS / ar; else w = iconS * ar;
-      g.drawImage(im, c.x + c.w / 2 - w / 2, iconCy - h / 2, w, h);
-    } else {
-      lineIcon(g, iconFor(b.label), c.x + c.w / 2, iconCy, iconS, color);
+    if (showIcon) {
+      const iconCy = c.y + c.h / 2 - c.h * 0.16;
+      const im = b.id != null ? imgs[b.id] : undefined;
+      if (b.icon && im && im.complete && im.naturalWidth) {
+        const ar = im.naturalWidth / im.naturalHeight; let w = iconS, h = iconS;
+        if (ar > 1) h = iconS / ar; else w = iconS * ar;
+        g.drawImage(im, c.x + c.w / 2 - w / 2, iconCy - h / 2, w, h);
+      } else {
+        lineIcon(g, iconFor(b.label), c.x + c.w / 2, iconCy, iconS, color);
+      }
     }
     g.fillStyle = color; g.font = "700 " + labelF + "px " + fam; g.textAlign = "center"; g.textBaseline = "middle";
-    g.fillText(b.label || "", c.x + c.w / 2, c.y + c.h / 2 + c.h * 0.22);
+    g.fillText(b.label || "", c.x + c.w / 2, showIcon ? c.y + c.h / 2 + c.h * 0.22 : c.y + c.h / 2);
   });
   void H;
 }
@@ -155,6 +158,7 @@ export function RichMenuGenerator({ open, onClose, onDone, initial }: { open: bo
   const [switchAlias, setSwitchAlias] = useState(""); // 點另一頁切到的 alias（單頁可留空）
   const [color, setColor] = useState("#2e4a36");
   const [msgPrefix, setMsgPrefix] = useState("▶");
+  const [showIcon, setShowIcon] = useState(true);
   const [buttons, setButtons] = useState<Btn[]>([nb("我的合約"), nb("修繕報修"), nb("房屋繳租"), nb("好物推薦")]);
   const [tick, setTick] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -164,8 +168,8 @@ export function RichMenuGenerator({ open, onClose, onDone, initial }: { open: bo
   const setCanvas = useCallback((node: HTMLCanvasElement | null) => { canvasRef.current = node; if (node) setTick((t) => t + 1); }, []);
 
   const draw = useCallback(() => {
-    if (canvasRef.current) renderRichMenuCanvas(canvasRef.current, { color, tabA, tabB, active: act, size, buttons, imgs: imgs.current });
-  }, [color, tabA, tabB, act, buttons, size]);
+    if (canvasRef.current) renderRichMenuCanvas(canvasRef.current, { color, tabA, tabB, active: act, size, buttons, imgs: imgs.current, showIcon });
+  }, [color, tabA, tabB, act, buttons, size, showIcon]);
 
   useEffect(() => { if (open) draw(); }, [open, draw, tick]);
 
@@ -177,12 +181,14 @@ export function RichMenuGenerator({ open, onClose, onDone, initial }: { open: bo
       setKey(initial.key || ""); setName(initial.name || ""); setChatBarText(initial.chatBarText || "選單");
       setSize(initial.size === "half" ? "half" : "full"); setSelected(initial.selected !== false);
       setTabA(initial.tabA || "一般服務"); setTabB(initial.tabB || "合約與紀錄");
-      setActive(String(initial.active ?? "0")); setSwitchAlias(initial.switchAlias || ""); setColor(initial.color || "#2e4a36"); setMsgPrefix(initial.msgPrefix ?? "▶");
+      setActive(String(initial.active ?? "0")); setSwitchAlias(initial.switchAlias || ""); setColor(initial.color || "#2e4a36"); setMsgPrefix(initial.msgPrefix ?? "▶"); setShowIcon(initial.showIcon !== false);
       const bs = Array.isArray(initial.buttons) && initial.buttons.length ? initial.buttons : [{ label: "" }];
-      setButtons(bs.map((b: any) => ({ id: _seq++, label: b.label || "", atype: (b.atype === "message" || b.atype === "postback") ? b.atype : "uri", url: b.url || "", text: b.text || "", query: b.query || "" } as Btn)));
+      const mapped = bs.map((b: any) => ({ id: _seq++, label: b.label || "", atype: (b.atype === "message" || b.atype === "postback") ? b.atype : "uri", url: b.url || "", text: b.text || "", query: b.query || "", icon: b.icon || undefined } as Btn));
+      setButtons(mapped);
+      mapped.forEach((b) => { if (b.icon) { const im = new Image(); im.onload = () => { imgs.current[b.id] = im; setTick((t) => t + 1); }; im.src = b.icon; } });
     } else {
       setKey(""); setName(""); setChatBarText("選單"); setSize("full"); setSelected(true);
-      setTabA("一般服務"); setTabB("合約與紀錄"); setActive("0"); setSwitchAlias(""); setColor("#2e4a36"); setMsgPrefix("▶");
+      setTabA("一般服務"); setTabB("合約與紀錄"); setActive("0"); setSwitchAlias(""); setColor("#2e4a36"); setMsgPrefix("▶"); setShowIcon(true);
       setButtons([nb("我的合約"), nb("修繕報修"), nb("房屋繳租"), nb("好物推薦")]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -226,7 +232,7 @@ export function RichMenuGenerator({ open, onClose, onDone, initial }: { open: bo
         else if (b.atype === "message") { actionType = "message"; payload = { text: (msgPrefix || "") + (b.text || "") }; }
         areas.push({ x: c.x, y: c.y, width: c.w, height: c.h, actionType, actionPayload: payload, label: b.label, sortOrder: i + 1 });
       });
-      const generatorConfig = { key: key.trim(), name: name.trim(), chatBarText, size, selected, tabA, tabB, active, switchAlias, color, msgPrefix, buttons: buttons.map((b) => ({ label: b.label, atype: b.atype, url: b.url, text: b.text, query: b.query })) };
+      const generatorConfig = { key: key.trim(), name: name.trim(), chatBarText, size, selected, tabA, tabB, active, switchAlias, color, msgPrefix, showIcon, buttons: buttons.map((b) => ({ label: b.label, atype: b.atype, url: b.url, text: b.text, query: b.query, icon: b.icon })) };
       await upsert.mutateAsync({ key: key.trim(), name: name.trim(), chatBarText: (chatBarText.trim() || name.trim()).slice(0, 14), size, selected, imageAssetId: asset.assetId, aliasId: key.trim(), areas, generatorConfig });
       toast.success("已產生圖片並建立草稿選單，去「發布」即可");
       onDone(); onClose();
@@ -279,6 +285,7 @@ export function RichMenuGenerator({ open, onClose, onDone, initial }: { open: bo
                 <div><input type="color" value={color} onChange={(e) => setColor(e.target.value)} style={{ width: 56, height: 38, padding: "2px", borderRadius: "6px", cursor: "pointer" }} /></div>
               </div>
               <div className="flex items-center gap-2 pb-2"><Switch checked={selected} onCheckedChange={setSelected} /><Label>預設展開</Label></div>
+              <div className="flex items-center gap-2 pb-2"><Switch checked={showIcon} onCheckedChange={setShowIcon} /><Label>顯示 icon</Label></div>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">推薦色</span>

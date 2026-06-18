@@ -179,8 +179,14 @@ export function RichMenuManager() {
     try {
       for (const m of list) {
         const cfg = m.generator_config;
+        const btns = (cfg.buttons || []).map((b: any, i: number) => ({ ...b, id: i }));
+        const iconImgs: Record<number, HTMLImageElement> = {};
+        await Promise.all(btns.map((b: any) => new Promise<void>((res) => {
+          if (!b.icon) return res();
+          const im = new Image(); im.onload = () => { iconImgs[b.id] = im; res(); }; im.onerror = () => res(); im.src = b.icon;
+        })));
         const canvas = document.createElement("canvas");
-        renderRichMenuCanvas(canvas, { color: cfg.color || "#2e4a36", tabA: cfg.tabA || "", tabB: cfg.tabB || "", active: parseInt(String(cfg.active ?? "0"), 10), size: cfg.size === "half" ? "half" : "full", buttons: cfg.buttons || [] });
+        renderRichMenuCanvas(canvas, { color: cfg.color || "#2e4a36", tabA: cfg.tabA || "", tabB: cfg.tabB || "", active: parseInt(String(cfg.active ?? "0"), 10), size: cfg.size === "half" ? "half" : "full", buttons: btns, imgs: iconImgs, showIcon: cfg.showIcon !== false });
         const img = await exportImg(canvas);
         const asset = await upload.mutateAsync({ filename: m.key + (img.contentType === "image/jpeg" ? ".jpg" : ".png"), contentType: img.contentType, dataBase64: img.dataBase64, kind: "richmenu_image", width: canvas.width, height: canvas.height });
         await upsert.mutateAsync({ key: m.key, name: cfg.name || m.name, chatBarText: (cfg.chatBarText || cfg.name || m.name).slice(0, 14), size: cfg.size === "half" ? "half" : "full", selected: cfg.selected !== false, imageAssetId: asset.assetId, aliasId: m.key, areas: buildConfigAreas(cfg), generatorConfig: cfg });
