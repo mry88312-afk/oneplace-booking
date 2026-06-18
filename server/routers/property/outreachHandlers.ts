@@ -448,6 +448,44 @@ const SCHEDULE_COLS =
    last_error, to_char(last_attempt_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count,
    source, tag, to_char(send_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as send_at`;
 
+/** 合約到期(≤thresholdDays 天或已過期)＋沒預約續約/退租 的名單（跨 Supabase 合約 × TiDB 預約）。 */
+async function scanRenewalDueList(thresholdDays: number) {
+  const pool = await sbQuery<any>(
+    `select t.line_uid, t.primary_name, t.primary_phone,
+            tc.contract_no, to_char(tc.end_date,'YYYY-MM-DD') as end_date,
+            (tc.end_date - current_date) as days_left,
+            p.short_name as property, u.unit_no as room,
+            p.ownership_region as region, p.hq_internal_category as internal_cat
+       from contract.tenant_contracts tc
+       join contract.tenant_contract_parties pa on pa.tenant_contract_id = tc.id
+       join contract.tenants t on t.id = pa.tenant_id
+       left join property.properties p on p.id = tc.property_id
+       left join property.units u on u.id = tc.unit_id
+      where tc.status='active' and tc.deleted_at is null
+        and tc.end_date <= current_date + $1::int
+        and t.line_uid is not null
+      order by p.ownership_region nulls last, tc.end_date`,
+    [thresholdDays],
+  );
+  // TiDB：已 confirmed 續約/退租 的 uid（沿用 hasActiveBookingSuppress 邏輯，一次撈全部）
+  let booked = new Set<string>();
+  try {
+    const db = await getDb();
+    if (db) {
+      const rows = await db
+        .select({ uid: schema.bookingRecords.tenantUid })
+        .from(schema.bookingRecords)
+        .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
+        .where(and(eq(schema.bookingRecords.status, "confirmed"), inArray(schema.bookingTemplates.contractAction, ["續約", "退租"])));
+      booked = new Set(rows.map((r: any) => r.uid).filter(Boolean));
+    }
+  } catch (e: any) {
+    console.error("[renewalDue] TiDB 預約查核失敗:", e?.message);
+  }
+  const list = pool.filter((r: any) => !booked.has(r.line_uid));
+  return { total: pool.length, bookedCount: pool.length - list.length, list };
+}
+
 export const outreachRouter = router({
   /** 後台是否已接上 Supabase（給前端顯示提示用） */
   health: adminProcedure.query(() => ({ supabaseConfigured: isSupabaseConfigured() })),
@@ -935,5 +973,25 @@ export const outreachRouter = router({
       sets.push(`updated_at=now()`);
       await sbQuery(`update outreach.settings set ${sets.join(", ")} where id=1`, params);
       return { ok: true };
+    }),
+
+  // 合約到期但沒預約續約/退租 → 篩名單 + 一鍵發提醒給主管
+  scanRenewalDue: adminProcedure
+    .input(z.object({ thresholdDays: z.number().int().min(-365).max(365).default(30) }))
+    .query(async ({ input }) => ({ thresholdDays: input.thresholdDays, ...(await scanRenewalDueList(input.thresholdDays)) })),
+
+  sendRenewalDueReminder: adminProcedure
+    .input(z.object({ supervisorUid: z.string().min(1), thresholdDays: z.number().int().min(-365).max(365).default(30) }))
+    .mutation(async ({ input }) => {
+      const { list } = await scanRenewalDueList(input.thresholdDays);
+      if (!list.length) return { ok: true, count: 0, sent: false };
+      const shown = list.slice(0, 50);
+      const lines = shown.map((r: any) =>
+        `• ${r.end_date}(剩${r.days_left}天) ${r.primary_name || "?"}｜${[r.property, r.room].filter(Boolean).join(" ")}｜${r.primary_phone || "無電話"}｜${r.region || "?"}${r.internal_cat ? "/" + r.internal_cat : ""}`,
+      );
+      const more = list.length > shown.length ? `\n…還有 ${list.length - shown.length} 位，請看後台。` : "";
+      const text = `⏰ 合約到期未預約提醒（${input.thresholdDays} 天內、未預約續約/退租，共 ${list.length} 位）\n\n${lines.join("\n")}${more}\n\n請盡快聯繫安排續約/退租。`;
+      const r = await relayPush(input.supervisorUid.trim(), { type: "text", text }, { record: false });
+      return { ok: r.success, count: list.length, sent: r.success, error: r.error };
     }),
 });

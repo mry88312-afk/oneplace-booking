@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { RenewalDueTab } from "./RenewalDueTab";
 import { toast } from "sonner";
 import {
   Loader2, Send, CalendarClock, SkipForward, Check, RotateCcw, RefreshCw, Save, AlertTriangle, Copy, Sparkles, Eye, Download,
@@ -1107,6 +1108,7 @@ export function OutreachBoard() {
           <TabsTrigger value="unbound">未綁UID</TabsTrigger>
           <TabsTrigger value="settings">篩選 / 設定</TabsTrigger>
           <TabsTrigger value="test">測試發送</TabsTrigger>
+          <TabsTrigger value="renewal">到期未約</TabsTrigger>
         </TabsList>
         <TabsContent value="schedule" className="mt-4">
           <ScheduleTab rules={(rulesQuery.data || []) as any[]} />
@@ -1125,6 +1127,9 @@ export function OutreachBoard() {
         </TabsContent>
         <TabsContent value="test" className="mt-4">
           <TestSendTab />
+        </TabsContent>
+        <TabsContent value="renewal" className="mt-4">
+          <RenewalDueTab />
         </TabsContent>
       </Tabs>
     </div>
