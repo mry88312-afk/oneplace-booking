@@ -355,20 +355,8 @@ const CONTRACT: LockedBundle = {
       sortOrder: 4,
       createdAt: LOCKED_EPOCH,
     },
-    {
-      id: 300011,
-      templateId: 30002,
-      fieldType: "text",
-      label: "您的本名",
-      isRequired: true,
-      options: null,
-      ragicFieldId: "1013030",
-      descriptionText: null,
-      allowOther: false,
-      selectionMode: "checkbox",
-      sortOrder: 5,
-      createdAt: LOCKED_EPOCH,
-    },
+    // 註：原「您的本名」(1013030) 已移除 — 改線上續約後不再收本名；
+    // 送出時於 bookingConfirmHandler 把 1013030 寫死「線上續約」當備註（姓名仍在任務名）。
     {
       id: 300012,
       templateId: 30002,

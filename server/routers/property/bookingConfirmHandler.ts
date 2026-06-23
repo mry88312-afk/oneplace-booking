@@ -417,6 +417,12 @@ export async function handleConfirmBooking(
       }
     }
 
+    // 線上續約標記：從實體續約改線上後，讓同事在 Ragic 一眼看出這筆是線上續約。
+    // 寫入 1013030（原「您的本名」欄；本名已不收，租客姓名仍在任務名 taskName 的 (tenantName) 內）。
+    if (template.projectId === "contract") {
+      ragicData["1013030"] = "線上續約";
+    }
+
     const result = await ragicPost(template.ragicTaskPath, ragicData);
     ragicRecordId = String(result?.ragicId || "");
 
