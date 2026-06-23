@@ -24,9 +24,21 @@ import type {
 /** Drizzle schema 的 createdAt/updatedAt 是 Date 型別；hardcode 用統一固定值 */
 const LOCKED_EPOCH = new Date("2026-01-01T00:00:00.000Z");
 
+/**
+ * locked 表單欄位可附帶「條件式 UI」設定（僅前端渲染器 / 送出驗證讀取，不進 DB）：
+ *  - showWhen：依賴欄位答案命中才顯示（例：選「展延」才出現月數）
+ *  - optionsWhen：依賴欄位答案命中時改用另一組選項（例：展延→繳費方式只剩月繳）
+ *  - tone：description 欄位的色調，danger=紅色警示框
+ */
+type LockedFormField = BookingFormFieldRecord & {
+  showWhen?: { field: string; equals: string[] };
+  optionsWhen?: Array<{ field: string; equals: string; options: string[] }>;
+  tone?: "warning" | "danger";
+};
+
 export interface LockedBundle {
   template: BookingTemplateRecord;
-  fields: BookingFormFieldRecord[];
+  fields: LockedFormField[];
   rules: CalendarRoutingRuleRecord[];
 }
 
@@ -264,6 +276,55 @@ const CONTRACT: LockedBundle = {
     updatedAt: LOCKED_EPOCH,
   },
   fields: [
+    // ① 租期：1年 / 展延（選「展延」才會出現警示與月數）
+    {
+      id: 300013,
+      templateId: 30002,
+      fieldType: "select",
+      label: "租期",
+      isRequired: true,
+      options: ["1年", "展延"],
+      ragicFieldId: null,                            // TODO: 要寫回 Ragic 再補欄位ID
+      descriptionText: null,
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 0,
+      createdAt: LOCKED_EPOCH,
+    },
+    // ② 展延費用提醒（紅色警示框；僅選「展延」時顯示）
+    {
+      id: 300014,
+      templateId: 30002,
+      fieldType: "description",
+      label: "展延費用提醒",
+      isRequired: false,
+      options: null,
+      ragicFieldId: null,
+      descriptionText: "⚠️ 展延需收取一次性 2,000 元，並且無租金優惠",
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 1,
+      createdAt: LOCKED_EPOCH,
+      showWhen: { field: "租期", equals: ["展延"] },
+      tone: "danger",
+    },
+    // ③ 展延月數：1–11 個月（僅選「展延」時顯示）
+    {
+      id: 300015,
+      templateId: 30002,
+      fieldType: "select",
+      label: "展延月數",
+      isRequired: true,
+      options: Array.from({ length: 11 }, (_, i) => `${i + 1}個月`),
+      ragicFieldId: null,                            // TODO: 要寫回 Ragic 再補欄位ID
+      descriptionText: null,
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 2,
+      createdAt: LOCKED_EPOCH,
+      showWhen: { field: "租期", equals: ["展延"] },
+    },
+    // ④ 繳費方式：1年→月繳/半年繳/年繳；展延→只剩月繳
     {
       id: 300009,
       templateId: 30002,
@@ -275,8 +336,9 @@ const CONTRACT: LockedBundle = {
       descriptionText: null,
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 0,
+      sortOrder: 3,
       createdAt: LOCKED_EPOCH,
+      optionsWhen: [{ field: "租期", equals: "展延", options: ["月繳"] }],
     },
     {
       id: 300010,
@@ -290,7 +352,7 @@ const CONTRACT: LockedBundle = {
         "請先更新個人資料，並取得中信專屬固定式匯款帳號\nhttps://liff.line.me/2006833424-jX3tixwY",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 1,
+      sortOrder: 4,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -304,7 +366,7 @@ const CONTRACT: LockedBundle = {
       descriptionText: null,
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 2,
+      sortOrder: 5,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -318,7 +380,7 @@ const CONTRACT: LockedBundle = {
       descriptionText: null,
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 3,
+      sortOrder: 6,
       createdAt: LOCKED_EPOCH,
     },
   ],

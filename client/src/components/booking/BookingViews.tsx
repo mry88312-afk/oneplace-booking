@@ -15,6 +15,7 @@ import {
   BookingContainer, SuccessAnimation, LiffFailedAutoRedirect,
   formatTime, getWeekdayName, getDateDisplay, getDateDisplayFull,
   getTaipeiTimeStr, buildGoogleCalendarUrl,
+  isFieldVisible, resolveFieldOptions,
   type PageView,
 } from "./utils";
 import { BookingCalendar } from "./BookingCalendar";
@@ -368,6 +369,27 @@ export function FormView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 條件式欄位：依賴答案改變時，清掉「已隱藏欄位」或「選項已失效」的殘留答案。
+  // 例：租期 1年→展延後，繳費方式殘留的「年繳」要清掉；隱藏的必填欄位也不該卡住送出。
+  useEffect(() => {
+    setFormAnswers((prev) => {
+      let next = prev;
+      let changed = false;
+      const ensure = () => { if (!changed) { next = { ...prev }; changed = true; } };
+      for (const f of (template.fields || [])) {
+        if (!f?.label) continue;
+        if (!isFieldVisible(f, prev)) {
+          if (prev[f.label] !== undefined) { ensure(); delete next[f.label]; }
+          continue;
+        }
+        if (f.fieldType === "select" && prev[f.label] && !resolveFieldOptions(f, prev).includes(prev[f.label])) {
+          ensure(); delete next[f.label];
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [formAnswers, template.fields, setFormAnswers]);
+
   return (
     <BookingContainer>
       <div className="px-6 py-5 border-b border-gray-100">
@@ -405,7 +427,7 @@ export function FormView({
       <div className="flex-1 px-6 py-6 max-w-md mx-auto w-full">
         <h3 className="text-lg font-bold text-gray-900 mb-4">補充資料</h3>
         <div className="space-y-5">
-          {(template.fields || []).filter((field: any) => field.fieldType !== "line_uid" && field.fieldType !== "inbox_url").map((field: any) => (
+          {(template.fields || []).filter((field: any) => field.fieldType !== "line_uid" && field.fieldType !== "inbox_url" && isFieldVisible(field, formAnswers)).map((field: any) => (
             <div key={field.id}>
               {field.fieldType !== "description" && (
                 <Label className="text-sm font-medium text-gray-700">{field.label}{field.isRequired && <span className="text-red-500 ml-1">*</span>}</Label>
@@ -415,7 +437,11 @@ export function FormView({
                 <p className="text-xs text-gray-400 mt-0.5 whitespace-pre-wrap">{field.descriptionText}</p>
               )}
               {field.fieldType === "description" && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg"><p className="text-sm text-amber-800 whitespace-pre-wrap">{linkifyText(field.descriptionText || field.label)}</p></div>
+                field.tone === "danger" ? (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg"><p className="text-sm text-red-700 whitespace-pre-wrap">{linkifyText(field.descriptionText || field.label)}</p></div>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg"><p className="text-sm text-amber-800 whitespace-pre-wrap">{linkifyText(field.descriptionText || field.label)}</p></div>
+                )
               )}
               {field.fieldType === "checkbox" && (() => {
                 const isRadio = field.selectionMode === "radio";
@@ -507,7 +533,7 @@ export function FormView({
               {field.fieldType === "select" && (
                 <Select value={formAnswers[field.label] || ""} onValueChange={(v) => setFormAnswers({ ...formAnswers, [field.label]: v })}>
                   <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder="請選擇" /></SelectTrigger>
-                  <SelectContent>{((field.options as string[]) || []).map((opt: string) => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}</SelectContent>
+                  <SelectContent>{resolveFieldOptions(field, formAnswers).map((opt: string) => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}</SelectContent>
                 </Select>
               )}
               {field.fieldType === "file" && (

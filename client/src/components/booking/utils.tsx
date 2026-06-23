@@ -157,3 +157,28 @@ export function BookingErrorScreen({ message }: { message?: string }) {
 }
 
 export type PageView = "verify" | "phone" | "register" | "remittance" | "calendar" | "slots" | "instruction" | "form" | "success" | "cancel";
+
+// ─── 條件式表單欄位（續約「租期 → 展延」）──────────────────────────────────
+// locked template 的欄位可附帶 showWhen / optionsWhen；渲染器（顯示/選項）與
+// 送出驗證（必填檢查）共用以下兩個判斷，避免兩邊邏輯不一致。
+export interface FieldShowWhen { field: string; equals: string[] }
+export interface FieldOptionsRule { field: string; equals: string; options: string[] }
+
+/** 欄位是否該顯示：沒有 showWhen 一律顯示；有則看依賴欄位的答案是否命中。 */
+export function isFieldVisible(field: any, answers: Record<string, string>): boolean {
+  const c = field?.showWhen as FieldShowWhen | undefined;
+  if (!c) return true;
+  const v = answers?.[c.field];
+  return !!v && c.equals.includes(v);
+}
+
+/** select 當下應顯示的選項：optionsWhen 命中則用該組，否則用原 options。 */
+export function resolveFieldOptions(field: any, answers: Record<string, string>): string[] {
+  const rules = field?.optionsWhen as FieldOptionsRule[] | undefined;
+  if (Array.isArray(rules)) {
+    for (const r of rules) {
+      if (answers?.[r.field] === r.equals) return r.options;
+    }
+  }
+  return (field?.options as string[]) || [];
+}

@@ -7,6 +7,7 @@ import liff from "@line/liff";
 import {
   getTaipeiNow, toDateStr,
   BookingLoadingScreen, BookingErrorScreen,
+  isFieldVisible,
   type PageView,
 } from "@/components/booking";
 import {
@@ -502,6 +503,7 @@ export default function BookingPublic() {
     if (template?.fields) {
       for (const field of template.fields) {
         if (field.fieldType === "description" || field.fieldType === "line_uid" || field.fieldType === "inbox_url") continue;
+        if (!isFieldVisible(field, formAnswers)) continue; // 條件式欄位：隱藏時不檢查必填
         if (field.isRequired && !formAnswers[field.label]) { toast.error(`請填寫「${field.label}」`); return; }
       }
     }
