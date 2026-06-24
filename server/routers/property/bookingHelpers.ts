@@ -389,10 +389,12 @@ export async function ragicUploadFile(
 export const RAGIC_API_KEY_VALUE = RAGIC_API_KEY;
 
 /**
- * P19a: 統一的模版解析器 — DB 優先，hardcode fallback。
+ * P19a/P81-A: 統一的模版解析器 — locked 專案 hardcode 優先，其餘走 DB。
  *
- * - 後台在 DB 改了設定 → DB 命中 → 立即生效
- * - DB 連線失敗 / 該 projectId 不在 DB → fallback 到 lockedTemplates 的 hardcode（退租/續約保險絲）
+ * - 退租/續約（lockedTemplates 命中）→ 直接回 hardcode，**完全不打 DB**
+ *     · 這才是 lockedTemplates 的設計原意（見該檔頭註解「先呼叫 getLockedBundle」）
+ *     · 省掉每支查詢 1~3 次雲端 MySQL 來回，並確保程式碼即真相（DB 殘留的舊 record 不會反蓋）
+ * - 一般專案（後台 BookingAdmin 建立）→ getLockedBundle 回 null → 走 DB 查詢
  * - 都找不到 → 回 null（呼叫端轉 NOT_FOUND）
  *
  * 回傳 { template, fields, rules }（fields/rules 已按 sortOrder 排序），與 LockedBundle 結構一致。
@@ -400,7 +402,13 @@ export const RAGIC_API_KEY_VALUE = RAGIC_API_KEY;
 export async function resolveTemplateBundle(
   projectId: string,
 ): Promise<LockedBundle | null> {
-  // 1) DB 優先
+  // P81-A: locked 專案（退租/續約）hardcode 優先、跳過 DB（熱路徑省雲端 DB 來回）
+  const locked = getLockedBundle(projectId);
+  if (locked) {
+    return locked.template.isActive ? locked : null;
+  }
+
+  // 一般專案才查 DB
   try {
     const db = await getDb();
     if (db) {
@@ -428,14 +436,8 @@ export async function resolveTemplateBundle(
       }
     }
   } catch (err: any) {
-    console.error(
-      "[resolveTemplateBundle] DB error, fallback to hardcode:",
-      err?.message,
-    );
+    console.error("[resolveTemplateBundle] DB error:", err?.message);
   }
 
-  // 2) fallback hardcode（退租/續約）
-  const locked = getLockedBundle(projectId);
-  if (locked && locked.template.isActive) return locked;
   return null;
 }
