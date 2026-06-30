@@ -274,6 +274,83 @@ function buildJgbCard(occupancy: string) {
   };
 }
 
+/**
+ * P86：退租點交「清潔提醒」輪播（4 張）。退租 (projectId=checkout) 預約成功後加發。
+ * 圖片放 Supabase line-assets/flex_image（公開 bucket）。衛浴/陽台非人人有 → 純文字、措辭「如有」。
+ */
+const CHECKOUT_IMG = {
+  closet: "https://dwoahbduwzfzqmwpvadj.supabase.co/storage/v1/object/public/line-assets/flex_image/checkout-closet.jpg",
+  window: "https://dwoahbduwzfzqmwpvadj.supabase.co/storage/v1/object/public/line-assets/flex_image/checkout-window.jpg",
+  filter: "https://dwoahbduwzfzqmwpvadj.supabase.co/storage/v1/object/public/line-assets/flex_image/checkout-filter.jpg",
+};
+
+function buildCheckoutCleaningCarousel() {
+  const item = (label: string, value: string) => ({
+    type: "box" as const, layout: "baseline" as const, spacing: "sm" as const, margin: "md" as const,
+    contents: [
+      { type: "text" as const, text: label, size: "sm" as const, color: "#8C8C8C", flex: 3 },
+      { type: "text" as const, text: value, size: "sm" as const, color: "#333333", flex: 7, wrap: true },
+    ],
+  });
+  const warn = (text: string) => ({ type: "text" as const, text, size: "xs" as const, color: "#C0392B", wrap: true, margin: "sm" as const });
+  const note = (text: string) => ({ type: "text" as const, text, size: "xs" as const, color: "#999999", wrap: true, margin: "sm" as const });
+  const subhead = (text: string) => ({ type: "text" as const, text, size: "sm" as const, weight: "bold" as const, color: "#333333", wrap: true, margin: "lg" as const });
+  const inlineImg = (url: string) => ({ type: "image" as const, url, size: "full" as const, aspectRatio: "1:1" as const, aspectMode: "cover" as const, margin: "md" as const });
+
+  const bubble = (heroUrl: string | undefined, emoji: string, title: string, accent: string, children: any[], page: string) => {
+    const b: any = {
+      type: "bubble", size: "mega",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "16px",
+        contents: [
+          { type: "box", layout: "horizontal", spacing: "sm", contents: [
+            { type: "text", text: emoji, size: "xl", flex: 0 },
+            { type: "text", text: title, weight: "bold", color: accent, size: "lg", gravity: "center", wrap: true },
+          ]},
+          { type: "separator", margin: "md", color: "#ECE9E1" },
+          ...children,
+          { type: "text", text: page, size: "xxs", color: "#BBBBBB", align: "end", margin: "lg" },
+        ],
+      },
+    };
+    if (heroUrl) b.hero = { type: "image", url: heroUrl, size: "full", aspectRatio: "3:4", aspectMode: "cover" };
+    return b;
+  };
+
+  const cards = [
+    bubble(CHECKOUT_IMG.closet, "🧹", "① 起居空間", "#4A6741", [
+      item("地板", "毛髮、灰塵請用吸塵器吸乾淨"),
+      item("保潔墊", "屬消耗品，請拆除並丟棄"),
+      item("桌面・衣櫃", "內外擦拭至無灰塵"),
+      item("窗溝・檯面", "縫隙灰塵一併清除"),
+      inlineImg(CHECKOUT_IMG.window),
+    ], "1 / 4"),
+    bubble(CHECKOUT_IMG.filter, "❄️", "② 冷氣濾網", "#3B7BB0", [
+      item("濾網", "拆下 → 水洗去灰 → 晾乾後裝回"),
+      warn("⛔ 勿濕的直接裝回，易發霉"),
+    ], "2 / 4"),
+    bubble(undefined, "🚿", "③ 衛浴・陽台（如有）", "#C2553D", [
+      subhead("🚿 獨立衛浴（套房）"),
+      item("地板・馬桶", "牆角黴斑刷洗乾淨"),
+      item("排水孔", "頭髮、雜物清除"),
+      subhead("🪴 陽台"),
+      item("地面", "落葉、雜物清掃"),
+      item("排水孔", "保持暢通、勿積水"),
+      note("ℹ️ 雅房／無陽台的房客，這張可以略過 🙆"),
+    ], "3 / 4"),
+    bubble(undefined, "✅", "④ 清空與點交", "#4A6741", [
+      { type: "text", text: "點交前請清空所有私人物品與垃圾", size: "sm", color: "#333333", margin: "md", wrap: true },
+      { type: "text", text: "🤝 我們點交當天見！", size: "sm", weight: "bold", color: "#4A6741", margin: "lg", wrap: true },
+    ], "4 / 4"),
+  ];
+
+  return {
+    type: "flex" as const,
+    altText: "退租點交・清潔提醒",
+    contents: { type: "carousel", contents: cards },
+  };
+}
+
 export async function handleConfirmBooking(
   input: {
     projectId: string;
@@ -712,6 +789,13 @@ export async function handleConfirmBooking(
       }
 
       if (!isRenewal) {
+      // P86：退租點交「清潔提醒」輪播（只在退租 checkout 發；確認卡仍走下方原本 webhook 流程）
+      if (template.projectId === "checkout") {
+        (async () => {
+          const r = await relayPush(input.uid, buildCheckoutCleaningCarousel());
+          if (!r.success) console.error("[Booking] 退租清潔卡推送失敗:", r.error);
+        })().catch((e: any) => console.error("[Booking] 退租清潔卡推送例外:", e?.message));
+      }
       const webhookUrl = process.env.MAIN_SYSTEM_WEBHOOK_URL;
       const webhookSecret = process.env.BOOKING_WEBHOOK_SECRET;
 
