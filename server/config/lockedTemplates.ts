@@ -184,6 +184,20 @@ const CHECKOUT: LockedBundle = {
       sortOrder: 5,
       createdAt: LOCKED_EPOCH,
     },
+    {
+      id: 270031,
+      templateId: 1,
+      fieldType: "text",
+      label: "匯款通知email",
+      isRequired: true,
+      options: null,
+      ragicFieldId: "1023169",
+      descriptionText: "退租押金／帳單的匯款通知會寄到這個 email，請正確填寫",
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 6,
+      createdAt: LOCKED_EPOCH,
+    },
   ],
   rules: [
     {
