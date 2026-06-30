@@ -46,6 +46,24 @@ export function getDateDisplay(dateStr: string): string {
   return `${y}/${m}/${d}`;
 }
 
+/** 'YYYY-MM-DD' 加減天數（UTC，避免時區位移）。 */
+export function addDaysYmd(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+
+/** start 到 endInclusive（含）共幾個月（用於續約期間提示「共 X 個月」）。 */
+export function monthsBetweenYmd(start: string, endInclusive: string): number {
+  const endExclusive = addDaysYmd(endInclusive, 1);
+  const [sy, sm, sd] = start.split("-").map(Number);
+  const [ey, em, ed] = endExclusive.split("-").map(Number);
+  let months = (ey - sy) * 12 + (em - sm);
+  if (ed < sd) months -= 1;
+  return months;
+}
+
 export function getDateDisplayFull(dateStr: string): string {
   return `${getDateDisplay(dateStr)} ${getWeekdayName(dateStr)}`;
 }

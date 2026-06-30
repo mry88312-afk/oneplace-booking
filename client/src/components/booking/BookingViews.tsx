@@ -15,7 +15,7 @@ import {
   BookingContainer, SuccessAnimation, LiffFailedAutoRedirect,
   formatTime, getWeekdayName, getDateDisplay, getDateDisplayFull,
   getTaipeiTimeStr, buildGoogleCalendarUrl,
-  isFieldVisible, resolveFieldOptions,
+  isFieldVisible, resolveFieldOptions, monthsBetweenYmd,
   type PageView,
 } from "./utils";
 import { BookingCalendar } from "./BookingCalendar";
@@ -344,6 +344,10 @@ interface FormViewProps {
   setView: (v: PageView) => void;
   setConfirmedSlot: (s: any) => void;
   isPreset?: boolean;
+  // 線上續約：合約到期日選擇器（renewalWindow 來自 verify；非續約為 null → 不顯示）
+  renewalWindow?: any;
+  renewalEndDate?: string;
+  setRenewalEndDate?: (v: string) => void;
 }
 
 export function FormView({
@@ -351,8 +355,30 @@ export function FormView({
   formAnswers, setFormAnswers, fileUploads, setFileUploads,
   isUploading, isBooking, handleFileUpload, handleConfirmBooking,
   setView, setConfirmedSlot, isPreset = false,
+  renewalWindow, renewalEndDate, setRenewalEndDate,
 }: FormViewProps) {
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // ── 線上續約「合約到期日」狀態 ──
+  const rw = renewalWindow && renewalWindow.ok ? renewalWindow : null;
+  const rwTooLate = !!(renewalWindow && renewalWindow.tooLate);
+  const chosenEnd = renewalEndDate || "";
+  const isExtension = !!(rw && chosenEnd && rw.fullYearEndDate && chosenEnd < rw.fullYearEndDate);
+  const endOutOfRange = !!(
+    rw && chosenEnd &&
+    ((rw.minDate && chosenEnd < rw.minDate) || (rw.maxDate && chosenEnd > rw.maxDate))
+  );
+  const renewalBlocked = rwTooLate || (!!rw && (!chosenEnd || endOutOfRange));
+  const durationMonths = rw && chosenEnd && rw.startDate && chosenEnd >= rw.startDate
+    ? monthsBetweenYmd(rw.startDate, chosenEnd) : 0;
+
+  // 展延（未滿1年）→ 繳費方式強制鎖「月繳」（與後端一致；後端送出時也會再強制一次）
+  useEffect(() => {
+    if (isExtension && formAnswers["繳費方式"] !== "月繳") {
+      setFormAnswers((prev) => ({ ...prev, 繳費方式: "月繳" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExtension]);
 
   // 數字加減欄位（label 含「人數」的 text 欄位）→ 用 stepper 呈現，預設 1
   const isCounterField = (f: any) =>
@@ -427,6 +453,48 @@ export function FormView({
       <div className="flex-1 px-6 py-6 max-w-md mx-auto w-full">
         <h3 className="text-lg font-bold text-gray-900 mb-4">補充資料</h3>
         <div className="space-y-5">
+          {/* 線上續約：合約到期日（開始日固定、預設滿1年、未滿1年=展延、最短1個月、上限案場到期日-15天） */}
+          {renewalWindow && (
+            <div>
+              <Label className="text-sm font-medium text-gray-700">合約到期日<span className="text-red-500 ml-1">*</span></Label>
+              {rwTooLate ? (
+                <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-sm text-red-700 whitespace-pre-wrap">案場即將到期，無法線上選擇續約到期日，請聯繫專員協助 🙏</p>
+                </div>
+              ) : rw ? (
+                <>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    新合約開始日 <span className="font-medium text-gray-600">{getDateDisplay(rw.startDate)}</span>（固定不可變更）；請選到期日，預設為滿一年
+                  </p>
+                  <input
+                    type="date"
+                    value={chosenEnd}
+                    min={rw.minDate || undefined}
+                    max={rw.maxDate || undefined}
+                    onChange={(e) => setRenewalEndDate && setRenewalEndDate(e.target.value)}
+                    className="mt-1.5 h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B8E6B]"
+                  />
+                  {chosenEnd && !endOutOfRange && (
+                    <p className="text-xs text-gray-500 mt-1.5">
+                      合約期間 {getDateDisplay(rw.startDate)} ～ {getDateDisplay(chosenEnd)}（共 {durationMonths} 個月）
+                    </p>
+                  )}
+                  {endOutOfRange && (
+                    <p className="text-xs text-red-600 mt-1.5">
+                      請選擇 {getDateDisplay(rw.minDate)}{rw.maxDate ? ` ～ ${getDateDisplay(rw.maxDate)}` : " 之後"} 之間的日期
+                    </p>
+                  )}
+                  {isExtension && !endOutOfRange && (
+                    <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-sm text-red-700 whitespace-pre-wrap">⚠️ 未滿一年屬展延，須收取一次性 2,000 元，且僅能選擇「月繳」。</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-gray-400 mt-1.5">（合約到期日將由專員與您後續確認）</p>
+              )}
+            </div>
+          )}
           {(template.fields || []).filter((field: any) => field.fieldType !== "line_uid" && field.fieldType !== "inbox_url" && isFieldVisible(field, formAnswers)).map((field: any) => (
             <div key={field.id}>
               {field.fieldType !== "description" && (
@@ -530,12 +598,18 @@ export function FormView({
               ) : (
                 <Input value={formAnswers[field.label] || ""} onChange={(e) => setFormAnswers({ ...formAnswers, [field.label]: e.target.value })} className="mt-1.5 h-11" />
               ))}
-              {field.fieldType === "select" && (
-                <Select value={formAnswers[field.label] || ""} onValueChange={(v) => setFormAnswers({ ...formAnswers, [field.label]: v })}>
-                  <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder="請選擇" /></SelectTrigger>
-                  <SelectContent>{resolveFieldOptions(field, formAnswers).map((opt: string) => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}</SelectContent>
-                </Select>
-              )}
+              {field.fieldType === "select" && (() => {
+                // 展延（未滿1年）時「繳費方式」鎖成月繳、禁止改
+                const lockPayment = isExtension && field.label === "繳費方式";
+                const opts = lockPayment ? ["月繳"] : resolveFieldOptions(field, formAnswers);
+                return (
+                  <Select value={lockPayment ? "月繳" : (formAnswers[field.label] || "")} disabled={lockPayment}
+                    onValueChange={(v) => setFormAnswers({ ...formAnswers, [field.label]: v })}>
+                    <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder="請選擇" /></SelectTrigger>
+                    <SelectContent>{opts.map((opt: string) => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}</SelectContent>
+                  </Select>
+                );
+              })()}
               {field.fieldType === "file" && (
                 <div className="mt-1.5">
                   <input type="file" accept="image/*,application/pdf" ref={(el) => { fileInputRefs.current[field.label] = el; }} className="hidden"
@@ -560,7 +634,7 @@ export function FormView({
           ))}
         </div>
         <Button className="w-full h-12 mt-8 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
-          onClick={handleConfirmBooking} disabled={isBooking}>
+          onClick={handleConfirmBooking} disabled={isBooking || renewalBlocked}>
           {isBooking ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />預約中...</>) : "確認預約"}
         </Button>
       </div>

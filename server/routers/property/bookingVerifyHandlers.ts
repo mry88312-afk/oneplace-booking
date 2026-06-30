@@ -90,6 +90,7 @@ export async function handleVerifyTenantUid(input: {
   });
 
   const contractRecordId = await lookupLatestContractRecordId(info.contractId);
+  const renewalWindow = await fetchRenewalWindowIfNeeded(template.projectId, info.contractId);
 
   return {
     tenantName: info.tenantName,
@@ -102,7 +103,16 @@ export async function handleVerifyTenantUid(input: {
     templateId: template.id,
     templateType: template.templateType,
     contractRecordId,
+    contractNo: info.contractId || null,
+    renewalWindow,
   };
+}
+
+/** 線上續約 (projectId=renewal) 才打 Supabase 抓合約到期日視窗；其他專案回 null 不增加延遲。 */
+async function fetchRenewalWindowIfNeeded(projectId: string, contractNo: string) {
+  if (projectId !== "renewal" || !contractNo) return null;
+  const { getRenewalWindow } = await import("../../db/supabaseClient");
+  return getRenewalWindow(contractNo);
 }
 
 export async function handleVerifyByPhone(input: {
@@ -171,6 +181,7 @@ export async function handleVerifyByPhone(input: {
   }
 
   const contractRecordId = await lookupLatestContractRecordId(info.contractId);
+  const renewalWindow = await fetchRenewalWindowIfNeeded(template.projectId, info.contractId);
 
   return {
     tenantName: info.tenantName,
@@ -183,5 +194,7 @@ export async function handleVerifyByPhone(input: {
     templateId: template.id,
     templateType: template.templateType,
     contractRecordId,
+    contractNo: info.contractId || null,
+    renewalWindow,
   };
 }

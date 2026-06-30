@@ -290,6 +290,8 @@ export async function handleConfirmBooking(
     formAnswers?: Record<string, any>;
     contractRecordId?: number;
     virtualAccount?: string;
+    renewalEndDate?: string;
+    contractNo?: string;
   },
   ctx: any,
 ) {
@@ -423,6 +425,29 @@ export async function handleConfirmBooking(
     // 寫入 1013030（原「您的本名」欄；本名已不收，租客姓名仍在任務名 taskName 的 (tenantName) 內）。
     if (template.projectId === "renewal") {
       ragicData["1013030"] = "線上續約";
+    }
+
+    // 線上續約 合約期間：寫回 開始日(1013716)、到期日(1013717)、展延備註(1013722)。
+    // 用 contractNo 重抓視窗、後端再驗一次（不信前端）；展延（未滿1年）強制月繳(1013721)。
+    if (template.projectId === "renewal" && input.renewalEndDate && input.contractNo) {
+      try {
+        const { getRenewalWindow, isRenewalEndValid } = await import("../../db/supabaseClient");
+        const win = await getRenewalWindow(input.contractNo);
+        if (win.ok && win.startDate && win.fullYearEndDate && isRenewalEndValid(win, input.renewalEndDate)) {
+          ragicData["1013716"] = win.startDate;          // 合約開始日（固定 = 目前到期日+1天）
+          ragicData["1013717"] = input.renewalEndDate;   // 合約到期日（租客選）
+          if (input.renewalEndDate < win.fullYearEndDate) {
+            ragicData["1013721"] = "月繳";                // 展延強制月繳（防前端被竄改）
+            ragicData["1013722"] = "展延＋2000元";        // 繳費方式備註
+          }
+        } else {
+          console.warn("[Booking] 續約到期日驗證未過/抓不到視窗，跳過日期寫回:", {
+            contractNo: input.contractNo, end: input.renewalEndDate, ok: win.ok, tooLate: win.tooLate,
+          });
+        }
+      } catch (e: any) {
+        console.error("[Booking] 續約日期寫回失敗（不影響預約）:", e?.message);
+      }
     }
 
     const result = await ragicPost(template.ragicTaskPath, ragicData);

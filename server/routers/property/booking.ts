@@ -452,6 +452,9 @@ export const bookingRouter = router({
         formAnswers: z.record(z.string(), z.any()).optional(),
         contractRecordId: z.number().optional(),
         virtualAccount: z.string().optional(),
+        // 線上續約：租客選的「下一份合約到期日」(YYYY-MM-DD) + 合約編號（後端再驗一次、寫回 Ragic）
+        renewalEndDate: z.string().optional(),
+        contractNo: z.string().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {

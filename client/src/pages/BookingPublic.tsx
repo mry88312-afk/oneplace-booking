@@ -75,6 +75,10 @@ export default function BookingPublic() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
   const [contractRecordId, setContractRecordId] = useState<number | null>(null);
+  // P84 線上續約：合約到期日視窗（verify 時抓）+ 租客選的到期日 + 合約編號
+  const [renewalWindow, setRenewalWindow] = useState<any>(null);
+  const [renewalEndDate, setRenewalEndDate] = useState("");
+  const [contractNo, setContractNo] = useState("");
   const [isUploading, setIsUploading] = useState<string | null>(null);
   const [bookingResult, setBookingResult] = useState<{ success: boolean; bookingId?: number } | null>(null);
   // P22b 續約付款設定（匯訂）— 只在 renewal 啟用，verify 後、選時段前插入
@@ -163,6 +167,14 @@ export default function BookingPublic() {
     else setView("calendar");
   };
 
+  // P84：verify 回來時接收續約日期視窗，並把預設到期日（滿1年或案場上限）帶入
+  const captureRenewal = (data: any) => {
+    const rw = data?.renewalWindow || null;
+    setRenewalWindow(rw);
+    setContractNo(data?.contractNo || "");
+    if (rw && rw.ok && rw.defaultDate) setRenewalEndDate(rw.defaultDate);
+  };
+
   const verifyRetryRef = useRef(0);
   const verifyMutation = trpc.booking.verifyTenantUid.useMutation({
     onSuccess: (data) => {
@@ -170,6 +182,7 @@ export default function BookingPublic() {
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
+      captureRenewal(data);
       setVerifiedPhone((data as any).phone || "");
       setVerifiedEmail((data as any).email || "");
       setVerifiedJob((data as any).job || "");
@@ -213,6 +226,7 @@ export default function BookingPublic() {
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
+      captureRenewal(data);
       setVerifiedPhone((data as any).phone || phoneInput.trim());
       setVerifiedEmail((data as any).email || "");
       setVerifiedJob((data as any).job || "");
@@ -495,6 +509,8 @@ export default function BookingPublic() {
       formAnswers: Object.keys(formAnswers).length > 0 ? formAnswers : undefined,
       contractRecordId: contractRecordId ?? undefined,
       virtualAccount: remittanceVA || undefined,
+      renewalEndDate: renewalEndDate || undefined,
+      contractNo: contractNo || undefined,
     });
   };
 
@@ -505,6 +521,15 @@ export default function BookingPublic() {
         if (field.fieldType === "description" || field.fieldType === "line_uid" || field.fieldType === "inbox_url") continue;
         if (!isFieldVisible(field, formAnswers)) continue; // 條件式欄位：隱藏時不檢查必填
         if (field.isRequired && !formAnswers[field.label]) { toast.error(`請填寫「${field.label}」`); return; }
+      }
+    }
+    // P84 線上續約：合約到期日必填且需在範圍內（與 FormView 擋鈕雙保險）
+    if (renewalWindow) {
+      if (renewalWindow.tooLate) { toast.error("案場即將到期，請聯繫專員協助續約"); return; }
+      if (renewalWindow.ok) {
+        if (!renewalEndDate) { toast.error("請選擇合約到期日"); return; }
+        if (renewalWindow.minDate && renewalEndDate < renewalWindow.minDate) { toast.error("續約最短為一個月"); return; }
+        if (renewalWindow.maxDate && renewalEndDate > renewalWindow.maxDate) { toast.error("到期日不可超過案場可續期限"); return; }
       }
     }
     doBooking(confirmedSlot);
@@ -612,7 +637,7 @@ export default function BookingPublic() {
   if (view === "calendar") return <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />;
   if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} isBooking={isBooking} />;
   if (view === "instruction" && confirmedSlot) return <InstructionView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} onNext={handleInstructionNext} setView={setView} setConfirmedSlot={setConfirmedSlot} />;
-  if (view === "form" && confirmedSlot) return <FormView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} formAnswers={formAnswers} setFormAnswers={setFormAnswers} fileUploads={fileUploads} setFileUploads={setFileUploads} isUploading={isUploading} isBooking={isBooking} handleFileUpload={handleFileUpload} handleConfirmBooking={handleConfirmBooking} setView={setView} setConfirmedSlot={setConfirmedSlot} isPreset={isPresetMode} />;
+  if (view === "form" && confirmedSlot) return <FormView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} formAnswers={formAnswers} setFormAnswers={setFormAnswers} fileUploads={fileUploads} setFileUploads={setFileUploads} isUploading={isUploading} isBooking={isBooking} handleFileUpload={handleFileUpload} handleConfirmBooking={handleConfirmBooking} setView={setView} setConfirmedSlot={setConfirmedSlot} isPreset={isPresetMode} renewalWindow={renewalWindow} renewalEndDate={renewalEndDate} setRenewalEndDate={setRenewalEndDate} />;
   if (view === "success" && bookingResult?.success) return <SuccessView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} selectedSlot={selectedSlot} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} calendarOwner={calendarOwner} />;
 
   return null;
