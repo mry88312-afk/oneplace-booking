@@ -417,9 +417,11 @@ export async function handleConfirmBooking(
       }
     }
 
-    // 線上續約標記：從實體續約改線上後，讓同事在 Ragic 一眼看出這筆是線上續約。
+    // 線上續約標記：讓同事在 Ragic 一眼看出這筆是線上續約（/book/renewal）。
+    // ⚠️ projectId 必須是 "renewal"（線上續約 DB 模版）— 不是 "contract"（那是線下續約 /book/contract）。
+    //    P80 誤寫成 "contract"，導致線上續約從來沒被標記到；P83 修正為 "renewal"。
     // 寫入 1013030（原「您的本名」欄；本名已不收，租客姓名仍在任務名 taskName 的 (tenantName) 內）。
-    if (template.projectId === "contract") {
+    if (template.projectId === "renewal") {
       ragicData["1013030"] = "線上續約";
     }
 

@@ -369,8 +369,9 @@ const CONTRACT: LockedBundle = {
       sortOrder: 4,
       createdAt: LOCKED_EPOCH,
     },
-    // 註：原「您的本名」(1013030) 已移除 — 改線上續約後不再收本名；
-    // 送出時於 bookingConfirmHandler 把 1013030 寫死「線上續約」當備註（姓名仍在任務名）。
+    // 註：原「您的本名」(1013030) 已移除 — 不再收本名（姓名仍在任務名）。
+    // 「線上續約」標記（1013030="線上續約"）由 bookingConfirmHandler 只對 projectId="renewal"（線上）寫入；
+    // 本 contract(線下續約)模版不寫。
     {
       id: 300012,
       templateId: 30002,
