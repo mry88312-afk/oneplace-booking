@@ -329,6 +329,29 @@ export async function handleConfirmBooking(
   const template = bundle.template;
   const isRenewal = template.templateType === "續約" || template.projectId === "renewal";
 
+  // 線上續約 合約期間：用 contractNo 重抓 Supabase 視窗、後端再驗一次（不信前端），
+  // 算出 開始日 / 到期日 / 是否展延，給「寫回 Ragic」與「確認卡」共用。
+  let renewalStartDate: string | null = null;
+  let renewalEndDate: string | null = null;
+  let renewalIsExtension = false;
+  if (template.projectId === "renewal" && input.renewalEndDate && input.contractNo) {
+    try {
+      const { getRenewalWindow, isRenewalEndValid } = await import("../../db/supabaseClient");
+      const win = await getRenewalWindow(input.contractNo);
+      if (win.ok && win.startDate && win.fullYearEndDate && isRenewalEndValid(win, input.renewalEndDate)) {
+        renewalStartDate = win.startDate;
+        renewalEndDate = input.renewalEndDate;
+        renewalIsExtension = input.renewalEndDate < win.fullYearEndDate;
+      } else {
+        console.warn("[Booking] 續約到期日驗證未過/抓不到視窗:", {
+          contractNo: input.contractNo, end: input.renewalEndDate, ok: win.ok, tooLate: win.tooLate,
+        });
+      }
+    } catch (e: any) {
+      console.error("[Booking] 取續約日期視窗失敗（不影響預約）:", e?.message);
+    }
+  }
+
   // 1. 寫入 Ragic 任務表
   let ragicRecordId = "";
   try {
@@ -427,26 +450,14 @@ export async function handleConfirmBooking(
       ragicData["1013030"] = "線上續約";
     }
 
-    // 線上續約 合約期間：寫回 開始日(1013716)、到期日(1013717)、展延備註(1013722)。
-    // 用 contractNo 重抓視窗、後端再驗一次（不信前端）；展延（未滿1年）強制月繳(1013721)。
-    if (template.projectId === "renewal" && input.renewalEndDate && input.contractNo) {
-      try {
-        const { getRenewalWindow, isRenewalEndValid } = await import("../../db/supabaseClient");
-        const win = await getRenewalWindow(input.contractNo);
-        if (win.ok && win.startDate && win.fullYearEndDate && isRenewalEndValid(win, input.renewalEndDate)) {
-          ragicData["1013716"] = win.startDate;          // 合約開始日（固定 = 目前到期日+1天）
-          ragicData["1013717"] = input.renewalEndDate;   // 合約到期日（租客選）
-          if (input.renewalEndDate < win.fullYearEndDate) {
-            ragicData["1013721"] = "月繳";                // 展延強制月繳（防前端被竄改）
-            ragicData["1013722"] = "展延＋2000元";        // 繳費方式備註
-          }
-        } else {
-          console.warn("[Booking] 續約到期日驗證未過/抓不到視窗，跳過日期寫回:", {
-            contractNo: input.contractNo, end: input.renewalEndDate, ok: win.ok, tooLate: win.tooLate,
-          });
-        }
-      } catch (e: any) {
-        console.error("[Booking] 續約日期寫回失敗（不影響預約）:", e?.message);
+    // 線上續約 合約期間：寫回 開始日(1013716)、到期日(1013717)；展延（未滿1年）強制月繳(1013721)+備註(1013722)。
+    // 視窗在前面已重抓並驗過（renewalStartDate/EndDate/IsExtension）。
+    if (renewalStartDate && renewalEndDate) {
+      ragicData["1013716"] = renewalStartDate;
+      ragicData["1013717"] = renewalEndDate;
+      if (renewalIsExtension) {
+        ragicData["1013721"] = "月繳";
+        ragicData["1013722"] = "展延＋2000元";
       }
     }
 
@@ -530,6 +541,16 @@ export async function handleConfirmBooking(
       ];
       if (input.roomNumber) infoRows.push({ label: "房間", value: input.roomNumber });
       if (input.address) infoRows.push({ label: "地址", value: input.address });
+      // P84：續約卡片顯示「租期」（合約期間 開始日～到期日，共 X 個月）
+      if (isRenewal && renewalStartDate && renewalEndDate) {
+        const fmtYmd = (s: string) => s.replace(/-/g, "/");
+        const sd = new Date(`${renewalStartDate}T00:00:00Z`);
+        const ed = new Date(`${renewalEndDate}T00:00:00Z`);
+        ed.setUTCDate(ed.getUTCDate() + 1); // 到期日含當天 → 算月數用隔天當結束
+        let months = (ed.getUTCFullYear() - sd.getUTCFullYear()) * 12 + (ed.getUTCMonth() - sd.getUTCMonth());
+        if (ed.getUTCDate() < sd.getUTCDate()) months -= 1;
+        infoRows.push({ label: "租期", value: `${fmtYmd(renewalStartDate)} ～ ${fmtYmd(renewalEndDate)}（共 ${months} 個月）` });
+      }
       // P30：續約卡片顯示問卷答案（繳費方式 / 是否變更入住人數 / 續約備註）
       if (isRenewal && input.formAnswers) {
         for (const f of bundle.fields) {
@@ -545,6 +566,10 @@ export async function handleConfirmBooking(
           }
           if (v) infoRows.push({ label: f.label, value: v });
         }
+      }
+      // P84：展延備註（未滿一年）
+      if (isRenewal && renewalIsExtension) {
+        infoRows.push({ label: "展延備註", value: "未滿一年，須收一次性 2,000 元（僅月繳）" });
       }
       // P26：續約卡片附上虛擬帳號，讓租客知道匯款帳號
       if (input.virtualAccount) {
