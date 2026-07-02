@@ -91,18 +91,18 @@ export async function ragicGet(ragicPath: string, params?: Record<string, string
 export async function ragicPost(ragicPath: string, data: Record<string, any>) {
   const url = `${BASE}/${APP}/${ragicPath}?v=3&api=&doFormula=true&doLinkLoad=first&doDefaultValue=true`;
   console.log(`[Ragic Payload] POST to ${ragicPath}:`, JSON.stringify(data, null, 2));
-  // 2026-07-02 起 Ragic 伺服器（Jetty）開始擋掉「含中文的 x-www-form-urlencoded」請求，回 Jetty 層的
-  // "HTTP 400 bad request"（非 Ragic app 的 JSON 錯誤）。改送 application/json body，中文可正常進到
-  // app 層解析；JSON 寫法不管 Ragic 日後是否回滾都相容。欄位值一律轉字串，保留原本 form 語意。
-  const jsonBody: Record<string, string> = {};
-  for (const [k, v] of Object.entries(data)) { jsonBody[k] = String(v ?? ""); }
+  console.log(`[Ragic Payload] URL params: doFormula=true, doLinkLoad=first`);
+  // 寫入用 x-www-form-urlencoded（生產已證實可用：含中文任務名的建立皆 status=200）。
+  // P87 曾短暫改 JSON，後由生產 log 確認 form-urlencoded 本來就正常而於 P88 回退。
+  const formBody = new URLSearchParams();
+  for (const [k, v] of Object.entries(data)) { formBody.append(k, String(v ?? "")); }
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Basic ${RAGIC_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: JSON.stringify(jsonBody),
+    body: formBody.toString(),
   });
   const text = await resp.text();
   console.log(`[API Response] Ragic POST response (status=${resp.status}):`, text);
@@ -112,7 +112,7 @@ export async function ragicPost(ragicPath: string, data: Record<string, any>) {
   }
   let parsed: any;
   try { parsed = JSON.parse(text); } catch { return { raw: text }; }
-  // Ragic 驗證/權限失敗時 HTTP 200 但 body 為 {"status":"INVALID"/"ERROR",...}；
+  // P87 保留：Ragic 驗證/權限失敗時 HTTP 200 但 body 為 {"status":"INVALID"/"ERROR",...}；
   // 必須視為失敗丟出，才能被上層 catch 到並觸發告警（否則又是無聲失敗）。
   if (parsed?.status === "INVALID" || parsed?.status === "ERROR") {
     console.error(`[API Response] Ragic POST body ERROR:`, parsed.msg || text);
@@ -125,16 +125,16 @@ export async function ragicPost(ragicPath: string, data: Record<string, any>) {
 export async function ragicPut(ragicPath: string, ragicId: number, data: Record<string, any>) {
   const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?v=3&api=&doFormula=true&doLinkLoad=first&doDefaultValue=true`;
   console.log(`[Ragic Payload] PUT to ${ragicPath}/${ragicId}:`, JSON.stringify(data, null, 2));
-  // 同 ragicPost：改送 application/json，避開 Ragic 對含中文 form-urlencoded 請求的 Jetty 400。
-  const jsonBody: Record<string, string> = {};
-  for (const [k, v] of Object.entries(data)) { jsonBody[k] = String(v ?? ""); }
+  // 同 ragicPost：寫入用 form-urlencoded（P88 回退；生產已證實可用）。
+  const formBody = new URLSearchParams();
+  for (const [k, v] of Object.entries(data)) { formBody.append(k, String(v ?? "")); }
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Basic ${RAGIC_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: JSON.stringify(jsonBody),
+    body: formBody.toString(),
   });
   const text = await resp.text();
   console.log(`[API Response] Ragic PUT response (status=${resp.status}):`, text);
