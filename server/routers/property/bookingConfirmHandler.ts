@@ -11,6 +11,7 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap, resolveTemplateBundle } from "./bookingHelpers";
+import { sbQuery } from "../../db/supabaseClient";
 
 /**
  * Fallback：直接打 LINE Messaging API push message
@@ -120,6 +121,54 @@ export async function relayPush(
   return relayToLine("push", { to: uid, messages: [flexMessage] }, {
     recordUid: opts?.record === false ? undefined : uid,
   });
+}
+
+/**
+ * P87：Ragic 任務寫入失敗時，發 LINE 文字告警給員工，讓同事能人工補建任務＋日曆。
+ * 這是 2026-07 Ragic 擋中文事件後補的安全網——就算 Ragic 再出狀況，也不會像那次一樣無聲吃掉預約。
+ * 名單來源：env BOOKING_ALERT_UIDS（逗號/空白/分號分隔）優先，否則沿用 outreach.settings.notify_uids。
+ * 全程 try/catch，告警本身絕不影響（也絕不中斷）預約主流程。
+ */
+export async function notifyBookingWriteFailure(info: {
+  tenantName: string;
+  roomNumber: string;
+  templateType: string;
+  startTime: string;
+  bookingId: number | string;
+  uid: string;
+  error: string;
+}): Promise<void> {
+  try {
+    let uids: string[] = [];
+    const envUids = process.env.BOOKING_ALERT_UIDS;
+    if (envUids && envUids.trim()) {
+      uids = envUids.split(/[,\s;]+/).filter(Boolean);
+    } else {
+      try {
+        const rows = await sbQuery<{ notify_uids: string | null }>(
+          "select notify_uids from outreach.settings where id=1 limit 1",
+        );
+        uids = (rows[0]?.notify_uids || "").split(/[,\s;]+/).filter(Boolean);
+      } catch (e: any) {
+        console.error("[Booking][ALERT] 讀 outreach.settings 通知名單失敗:", e?.message);
+      }
+    }
+    const t = new Date(new Date(info.startTime).getTime() + 8 * 3600000);
+    const when = `${t.getUTCFullYear()}/${String(t.getUTCMonth() + 1).padStart(2, "0")}/${String(t.getUTCDate()).padStart(2, "0")} ${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
+    const text =
+      `⚠️ 預約未寫入 Ragic，請人工補建任務＋Google 日曆\n\n` +
+      `類型：${info.templateType}\n姓名：${info.tenantName}\n房號：${info.roomNumber}\n時間：${when}\n` +
+      `預約編號：${info.bookingId}\nUID：${info.uid}\n\n原因：${String(info.error).slice(0, 300)}`;
+    console.error(
+      `[Booking][ALERT] Ragic 寫入失敗，告警 ${uids.length} 位員工：`,
+      text.replace(/\n/g, " | "),
+    );
+    for (const uid of uids) {
+      await relayPush(uid, { type: "text", text }, { record: false }).catch(() => {});
+    }
+  } catch (e: any) {
+    console.error("[Booking][ALERT] 告警流程本身失敗:", e?.message || e);
+  }
 }
 
 /**
@@ -431,6 +480,7 @@ export async function handleConfirmBooking(
 
   // 1. 寫入 Ragic 任務表
   let ragicRecordId = "";
+  let ragicWriteError: string | null = null;
   try {
     const startDt = new Date(input.startTime);
     const taipeiOffset = 8 * 60 * 60 * 1000;
@@ -540,6 +590,10 @@ export async function handleConfirmBooking(
 
     const result = await ragicPost(template.ragicTaskPath, ragicData);
     ragicRecordId = String(result?.ragicId || "");
+    if (!ragicRecordId) {
+      // 沒丟錯但也沒拿到 ragicId（Ragic 回應異常）→ 一樣當寫入失敗，之後告警。
+      ragicWriteError = `Ragic 回應未含 ragicId：${JSON.stringify(result).slice(0, 200)}`;
+    }
 
     if (ragicRecordId && fileFieldsToUpload.length > 0) {
       const numericRagicId = Number(ragicRecordId);
@@ -563,6 +617,7 @@ export async function handleConfirmBooking(
     }
   } catch (err: any) {
     console.error("[Booking] Ragic POST error:", err.message);
+    ragicWriteError = err?.message || String(err);
   }
 
   // 2. 建立本地預約記錄
@@ -583,6 +638,20 @@ export async function handleConfirmBooking(
     formAnswers: input.formAnswers || null,
     status: "confirmed",
   });
+
+  // 2b. Ragic 任務寫入失敗 → 告警員工人工補建（本地紀錄已寫、租客仍會收到確認卡，故靠告警補上動線）。
+  //     Fire-and-forget，絕不阻擋預約 response。
+  if (ragicWriteError) {
+    notifyBookingWriteFailure({
+      tenantName: input.tenantName,
+      roomNumber: input.roomNumber,
+      templateType: template.templateType || "預約",
+      startTime: input.startTime,
+      bookingId: record.insertId,
+      uid: input.uid,
+      error: ragicWriteError,
+    }).catch((e: any) => console.error("[Booking][ALERT] 觸發告警例外:", e?.message || e));
+  }
 
   // 3. 回寫合約記錄（/go-back/22 欄位 1015394 = 續約 or 退租）
   if (input.contractRecordId && template.contractAction) {

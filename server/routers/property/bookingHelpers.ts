@@ -91,16 +91,18 @@ export async function ragicGet(ragicPath: string, params?: Record<string, string
 export async function ragicPost(ragicPath: string, data: Record<string, any>) {
   const url = `${BASE}/${APP}/${ragicPath}?v=3&api=&doFormula=true&doLinkLoad=first&doDefaultValue=true`;
   console.log(`[Ragic Payload] POST to ${ragicPath}:`, JSON.stringify(data, null, 2));
-  console.log(`[Ragic Payload] URL params: doFormula=true, doLinkLoad=first`);
-  const formBody = new URLSearchParams();
-  for (const [k, v] of Object.entries(data)) { formBody.append(k, String(v ?? "")); }
+  // 2026-07-02 起 Ragic 伺服器（Jetty）開始擋掉「含中文的 x-www-form-urlencoded」請求，回 Jetty 層的
+  // "HTTP 400 bad request"（非 Ragic app 的 JSON 錯誤）。改送 application/json body，中文可正常進到
+  // app 層解析；JSON 寫法不管 Ragic 日後是否回滾都相容。欄位值一律轉字串，保留原本 form 語意。
+  const jsonBody: Record<string, string> = {};
+  for (const [k, v] of Object.entries(data)) { jsonBody[k] = String(v ?? ""); }
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Basic ${RAGIC_API_KEY}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
     },
-    body: formBody.toString(),
+    body: JSON.stringify(jsonBody),
   });
   const text = await resp.text();
   console.log(`[API Response] Ragic POST response (status=${resp.status}):`, text);
@@ -108,22 +110,31 @@ export async function ragicPost(ragicPath: string, data: Record<string, any>) {
     console.error(`[API Response] Ragic POST FAILED: status=${resp.status}, body=${text}`);
     throw new Error(`Ragic POST error: ${resp.status} - ${text}`);
   }
-  try { return JSON.parse(text); } catch { return { raw: text }; }
+  let parsed: any;
+  try { parsed = JSON.parse(text); } catch { return { raw: text }; }
+  // Ragic 驗證/權限失敗時 HTTP 200 但 body 為 {"status":"INVALID"/"ERROR",...}；
+  // 必須視為失敗丟出，才能被上層 catch 到並觸發告警（否則又是無聲失敗）。
+  if (parsed?.status === "INVALID" || parsed?.status === "ERROR") {
+    console.error(`[API Response] Ragic POST body ERROR:`, parsed.msg || text);
+    throw new Error(`Ragic POST body error: ${parsed.msg || text}`);
+  }
+  return parsed;
 }
 
 /** Ragic PUT（更新現有記錄） */
 export async function ragicPut(ragicPath: string, ragicId: number, data: Record<string, any>) {
   const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?v=3&api=&doFormula=true&doLinkLoad=first&doDefaultValue=true`;
   console.log(`[Ragic Payload] PUT to ${ragicPath}/${ragicId}:`, JSON.stringify(data, null, 2));
-  const formBody = new URLSearchParams();
-  for (const [k, v] of Object.entries(data)) { formBody.append(k, String(v ?? "")); }
+  // 同 ragicPost：改送 application/json，避開 Ragic 對含中文 form-urlencoded 請求的 Jetty 400。
+  const jsonBody: Record<string, string> = {};
+  for (const [k, v] of Object.entries(data)) { jsonBody[k] = String(v ?? ""); }
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Basic ${RAGIC_API_KEY}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
     },
-    body: formBody.toString(),
+    body: JSON.stringify(jsonBody),
   });
   const text = await resp.text();
   console.log(`[API Response] Ragic PUT response (status=${resp.status}):`, text);
@@ -133,8 +144,8 @@ export async function ragicPut(ragicPath: string, ragicId: number, data: Record<
   }
   let parsed: any;
   try { parsed = JSON.parse(text); } catch { return { raw: text }; }
-  // Ragic 權限失敗時 HTTP 200 但 body 是 {"status":"ERROR","msg":"..."}
-  if (parsed?.status === "ERROR") {
+  // Ragic 驗證/權限失敗時 HTTP 200 但 body 是 {"status":"INVALID"/"ERROR","msg":"..."}
+  if (parsed?.status === "INVALID" || parsed?.status === "ERROR") {
     console.error(`[API Response] Ragic PUT body ERROR:`, parsed.msg || text);
     throw new Error(`Ragic PUT body error: ${parsed.msg || text}`);
   }
