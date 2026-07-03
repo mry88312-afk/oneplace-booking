@@ -452,7 +452,8 @@ export const bookingRouter = router({
         formAnswers: z.record(z.string(), z.any()).optional(),
         contractRecordId: z.number().optional(),
         virtualAccount: z.string().optional(),
-        // 線上續約：租客選的「下一份合約到期日」(YYYY-MM-DD) + 合約編號（後端再驗一次、寫回 Ragic）
+        // 線上續約：租客選的「下一份合約開始日/到期日」(YYYY-MM-DD) + 合約編號（卡片顯示＋寫回 Ragic）
+        renewalStartDate: z.string().optional(),
         renewalEndDate: z.string().optional(),
         contractNo: z.string().optional(),
       }),

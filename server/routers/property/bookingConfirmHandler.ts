@@ -421,6 +421,7 @@ export async function handleConfirmBooking(
     formAnswers?: Record<string, any>;
     contractRecordId?: number;
     virtualAccount?: string;
+    renewalStartDate?: string;
     renewalEndDate?: string;
     contractNo?: string;
   },
@@ -460,27 +461,48 @@ export async function handleConfirmBooking(
   const template = bundle.template;
   const isRenewal = template.templateType === "續約" || template.projectId === "renewal";
 
-  // 線上續約 合約期間：用 contractNo 重抓 Supabase 視窗、後端再驗一次（不信前端），
-  // 算出 開始日 / 到期日 / 是否展延，給「寫回 Ragic」與「確認卡」共用。
+  // 線上續約 合約期間：算出 開始日 / 到期日 / 是否展延，給「寫回 Ragic」與「確認卡」共用。
+  // 策略：後端先重抓 Supabase 驗一次（不信前端）；若重抓沒取得（Supabase 當下抓不到/超時），
+  //       就用「租客實際填的」開始日+到期日當後備 → 確保只要租客有選日期，卡片一定顯示、Ragic 一定寫。
+  //       展延與否用開始日就能自算（到期日 < 開始日+1年-1天 = 展延），不必依賴 Supabase。
   let renewalStartDate: string | null = null;
   let renewalEndDate: string | null = null;
   let renewalIsExtension = false;
-  if (template.projectId === "renewal" && input.renewalEndDate && input.contractNo) {
-    try {
-      const { getRenewalWindow, isRenewalEndValid } = await import("../../db/supabaseClient");
-      const win = await getRenewalWindow(input.contractNo);
-      if (win.ok && win.startDate && win.fullYearEndDate && isRenewalEndValid(win, input.renewalEndDate)) {
-        renewalStartDate = win.startDate;
-        renewalEndDate = input.renewalEndDate;
-        renewalIsExtension = input.renewalEndDate < win.fullYearEndDate;
-      } else {
-        console.warn("[Booking] 續約到期日驗證未過/抓不到視窗:", {
-          contractNo: input.contractNo, end: input.renewalEndDate, ok: win.ok, tooLate: win.tooLate,
-        });
+  if (template.projectId === "renewal" && input.renewalEndDate) {
+    // 1) 後端重抓驗證（有 contractNo 才試）
+    if (input.contractNo) {
+      try {
+        const { getRenewalWindow, isRenewalEndValid } = await import("../../db/supabaseClient");
+        const win = await getRenewalWindow(input.contractNo);
+        if (win.ok && win.startDate && win.fullYearEndDate && isRenewalEndValid(win, input.renewalEndDate)) {
+          renewalStartDate = win.startDate;
+          renewalEndDate = input.renewalEndDate;
+          renewalIsExtension = input.renewalEndDate < win.fullYearEndDate;
+        } else {
+          console.warn("[Booking] 續約重抓驗證未過:", {
+            contractNo: input.contractNo, end: input.renewalEndDate,
+            ok: win.ok, tooLate: win.tooLate, min: win.minDate, max: win.maxDate,
+          });
+        }
+      } catch (e: any) {
+        console.error("[Booking] 續約重抓失敗:", e?.message);
       }
-    } catch (e: any) {
-      console.error("[Booking] 取續約日期視窗失敗（不影響預約）:", e?.message);
     }
+    // 2) 後備：重抓沒拿到、但前端有送開始日 → 用租客實際填的（展延用開始日自算）
+    if (!renewalStartDate && input.renewalStartDate) {
+      renewalStartDate = input.renewalStartDate;
+      renewalEndDate = input.renewalEndDate;
+      const fy = new Date(`${input.renewalStartDate}T00:00:00Z`);
+      fy.setUTCFullYear(fy.getUTCFullYear() + 1);
+      fy.setUTCDate(fy.getUTCDate() - 1); // 開始日 + 1年 - 1天
+      renewalIsExtension = input.renewalEndDate < fy.toISOString().slice(0, 10);
+      console.warn("[Booking] 續約改用前端後備值（重抓未取得）:", {
+        start: renewalStartDate, end: renewalEndDate, ext: renewalIsExtension,
+      });
+    }
+    console.log("[Booking] 續約合約期間結果:", {
+      contractNo: input.contractNo, start: renewalStartDate, end: renewalEndDate, ext: renewalIsExtension,
+    });
   }
 
   // 1. 寫入 Ragic 任務表

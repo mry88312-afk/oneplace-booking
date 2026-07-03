@@ -509,6 +509,7 @@ export default function BookingPublic() {
       formAnswers: Object.keys(formAnswers).length > 0 ? formAnswers : undefined,
       contractRecordId: contractRecordId ?? undefined,
       virtualAccount: remittanceVA || undefined,
+      renewalStartDate: (renewalWindow?.ok && renewalWindow?.startDate) || undefined,
       renewalEndDate: renewalEndDate || undefined,
       contractNo: contractNo || undefined,
     });
