@@ -387,8 +387,13 @@ function buildCheckoutCleaningCarousel() {
       item("排水孔", "保持暢通、勿積水"),
       note("ℹ️ 雅房／無陽台的房客，這張可以略過 🙆"),
     ], "3 / 4"),
+    // P89：第 4 張改「物品帶走檢查」清單（原為清空垃圾提醒）
     bubble(undefined, "✅", "④ 清空與點交", "#4A6741", [
-      { type: "text", text: "點交前請清空所有私人物品與垃圾", size: "sm", color: "#333333", margin: "md", wrap: true },
+      { type: "text", text: "離開前請檢查這些是否都帶走：", size: "sm", color: "#333333", margin: "md", wrap: true },
+      item("冰箱", "食材、飲料、冷凍品清空帶走"),
+      item("廚房用品", "鍋碗、餐具、調味料收拾帶走"),
+      item("鞋櫃", "鞋子、鞋盒全部清空"),
+      item("洗衣精", "洗衣精、洗衣袋等記得帶走"),
       { type: "text", text: "🤝 我們點交當天見！", size: "sm", weight: "bold", color: "#4A6741", margin: "lg", wrap: true },
     ], "4 / 4"),
   ];
