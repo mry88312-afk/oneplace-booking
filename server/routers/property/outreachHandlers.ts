@@ -246,19 +246,31 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
           continue;
         }
       }
-      // 合約已退租即止：Ragic 填了退租日（move_out_date）→ rule 卡不再發。
-      // 涵蓋「沒走退租預約、直接在 Ragic 退租」者（booking_records 查不到、hasActiveBookingSuppress 擋不住）。
-      // 註：Ragic「取消」是公式（過期或退租都會觸發），不可靠；退租日才是真正搬走的訊號。
+      // 發送前即時防呆（rule 卡）：合約已退租(move_out_date)、或同房已有「更晚開始的新合約」
+      // （本人續約 or 別人接手）→ 一律不發。涵蓋 recompute 與發送之間才退租/續約的同日空窗，
+      // 也擋「沒走線上預約、直接在 Ragic 處理」者。註：Ragic「取消」是公式（過期或退租都觸發），
+      // 不可靠；退租日＋房間後續合約才是可靠訊號。房間鍵：房號→unit_id→合約自成一房。
       if ((row.source ?? "rule") === "rule" && row.contract_no) {
-        const mo = await sbQuery<{ n: number }>(
-          `select count(*)::int as n from contract.tenant_contracts
-            where contract_no=$1 and move_out_date is not null`,
+        const chk = await sbQuery<{ moved_out: boolean; superseded: boolean }>(
+          `select tc.move_out_date is not null as moved_out,
+                  exists (
+                    select 1 from contract.tenant_contracts c2
+                     where c2.deleted_at is null
+                       and c2.property_id is not distinct from tc.property_id
+                       and coalesce(nullif(c2.legacy_snapshot->>'1014736',''), c2.unit_id::text, 'c:'||c2.contract_no)
+                         = coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no)
+                       and c2.start_date > tc.start_date
+                  ) as superseded
+             from contract.tenant_contracts tc
+            where tc.contract_no=$1
+            limit 1`,
           [row.contract_no],
         );
-        if (mo[0]?.n) {
+        const hit = chk[0];
+        if (hit && (hit.moved_out || hit.superseded)) {
           await sbQuery(
             `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1`,
-            [row.id, "合約已退租（move_out_date 已填，發送前查核）"],
+            [row.id, hit.moved_out ? "合約已退租（move_out_date 已填，發送前查核）" : "房間已有更新合約（續約/接手，發送前查核）"],
           );
           result.suppressed++;
           continue;

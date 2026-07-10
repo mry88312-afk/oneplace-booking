@@ -15,7 +15,7 @@
 -- 修法：一律改用「退租日(move_out_date)有無填」當「是否真的搬走」的訊號。
 
 -- 一次性止血（已於 2026-07-10 於正式庫執行；此處留底，可重放且冪等）：
--- 把「合約已填退租日、卻還排著 confirmed/pending」的 rule 卡改 suppressed。
+-- (1) 把「合約已填退租日、卻還排著 confirmed/pending」的 rule 卡改 suppressed。
 update outreach.schedule s
    set status='suppressed',
        suppressed_reason='退租止血：合約 move_out_date 已填（audit 2026-07-10）',
@@ -24,6 +24,23 @@ update outreach.schedule s
    and coalesce(s.source,'rule')='rule'
    and exists (select 1 from contract.tenant_contracts tc
                where tc.contract_no = s.contract_no and tc.move_out_date is not null);
+
+-- (2) P93：把「同房已有更晚開始的新合約（續約/接手）、舊約卻還排著」的 rule 卡改 suppressed。
+update outreach.schedule s
+   set status='suppressed',
+       suppressed_reason='房間已有更新合約（續約/接手），舊約到期卡回收（audit 2026-07-10）',
+       updated_at=now()
+  from contract.tenant_contracts tc
+ where s.status in ('pending','confirmed')
+   and coalesce(s.source,'rule')='rule'
+   and tc.contract_no = s.contract_no
+   and exists (
+     select 1 from contract.tenant_contracts c2
+      where c2.deleted_at is null
+        and c2.property_id is not distinct from tc.property_id
+        and coalesce(nullif(c2.legacy_snapshot->>'1014736',''), c2.unit_id::text, 'c:'||c2.contract_no)
+          = coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no)
+        and c2.start_date > tc.start_date);
 
 -- 排程重算：候選加 `tc.move_out_date is null`；並在每晚 recompute 尾端自動止血
 -- （排後才退租者 → 現有 pending/confirmed 的 rule 卡改 suppressed）。
@@ -103,6 +120,24 @@ begin
      and exists (
        select 1 from contract.tenant_contracts tc
         where tc.contract_no = s.contract_no and tc.move_out_date is not null);
+
+  -- P93 續約/接手後回收舊約殘存排程：同房已有「更晚開始的合約」→ 舊約到期卡改 suppressed。
+  -- 房間鍵：房號(1014736) → 無房號用 unit_id → 再無則合約自成一房（整租 fallback）。
+  update outreach.schedule s
+     set status = 'suppressed',
+         suppressed_reason = '房間已有更新合約（續約/接手），舊約到期卡回收',
+         updated_at = now()
+    from contract.tenant_contracts tc
+   where s.status in ('pending','confirmed')
+     and coalesce(s.source,'rule') = 'rule'
+     and tc.contract_no = s.contract_no
+     and exists (
+       select 1 from contract.tenant_contracts c2
+        where c2.deleted_at is null
+          and c2.property_id is not distinct from tc.property_id
+          and coalesce(nullif(c2.legacy_snapshot->>'1014736',''), c2.unit_id::text, 'c:'||c2.contract_no)
+            = coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no)
+          and c2.start_date > tc.start_date);
 
   return v_count;
 end;
