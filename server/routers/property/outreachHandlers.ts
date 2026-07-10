@@ -336,10 +336,14 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
 }
 
 /**
- * 退租提醒掃描（每日台北 17:00 由 pg_cron 經 pg_net 呼叫）：
- * 掃 TiDB「台北明天」的退租 confirmed 預約 → 排入今天 18:00（台北）的提醒；dedupe_key 擋重複。
+ * 預約前一日提醒掃描（每日台北 17:00 由 pg_cron 經 pg_net 呼叫）：
+ * 掃 TiDB「台北明天」某 contractAction 的 confirmed 預約 → 排入今天 18:00（台北）的提醒；dedupe_key 擋重複。
+ * 退租、續約共用此邏輯，只差 contractAction 與規則卡（ruleKey）。
  */
-export async function scanCheckoutReminders(): Promise<{ ok: boolean; scanned: number; inserted: number }> {
+async function scanBookingDayBeforeReminders(
+  action: "退租" | "續約",
+  ruleKey: string,
+): Promise<{ ok: boolean; scanned: number; inserted: number }> {
   if (!isSupabaseConfigured()) throw new Error("SUPABASE_DB_URL not set");
   const db = await getDb();
   if (!db) throw new Error("TiDB unavailable");
@@ -364,7 +368,7 @@ export async function scanCheckoutReminders(): Promise<{ ok: boolean; scanned: n
     .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
     .where(
       and(
-        eq(schema.bookingTemplates.contractAction, "退租"),
+        eq(schema.bookingTemplates.contractAction, action),
         eq(schema.bookingRecords.status, "confirmed"),
         gte(schema.bookingRecords.bookingTime, tomorrowTpMidnightUtcMs),
         lt(schema.bookingRecords.bookingTime, endMs),
@@ -384,18 +388,28 @@ export async function scanCheckoutReminders(): Promise<{ ok: boolean; scanned: n
     const r = await sbQuery<{ id: string }>(
       `insert into outreach.schedule
          (tenant_uid, tenant_name, room, property_name, rule_key, scheduled_date, status, send_at, source, vars, dedupe_key)
-       values ($1,$2,$3,$4,'checkout_d1',$5::date,'confirmed',$6::timestamptz,'booking',$7::jsonb,$8)
+       values ($1,$2,$3,$4,$5,$6::date,'confirmed',$7::timestamptz,'booking',$8::jsonb,$9)
        on conflict (dedupe_key) where dedupe_key is not null do nothing
        returning id`,
       [
         b.tenantUid, b.tenantName || null, b.roomNumber || null, b.address || null,
-        todayYmd, sendAtIso, JSON.stringify(vars), `checkout_d1:${b.id}:${bookingDate}`,
+        ruleKey, todayYmd, sendAtIso, JSON.stringify(vars), `${ruleKey}:${b.id}:${bookingDate}`,
       ],
     );
     inserted += r.length;
   }
-  console.log(`[outreach] scan-checkout: scanned ${rows.length}, inserted ${inserted}`);
+  console.log(`[outreach] scan-${ruleKey}: scanned ${rows.length}, inserted ${inserted}`);
   return { ok: true, scanned: rows.length, inserted };
+}
+
+/** 退租前一日提醒（明天有退租點交預約）。 */
+export async function scanCheckoutReminders() {
+  return scanBookingDayBeforeReminders("退租", "checkout_d1");
+}
+
+/** 續約前一日提醒（明天有續約專員預約）。 */
+export async function scanRenewalReminders() {
+  return scanBookingDayBeforeReminders("續約", "renewal_d1");
 }
 
 /** 投遞 API 核心：驗欄位 → 寫排程（source='api'、自動確認、去重碼擋重複）。 */

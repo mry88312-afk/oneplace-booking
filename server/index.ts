@@ -100,7 +100,7 @@ async function startServer() {
     }
   });
 
-  // 退租提醒掃描：pg_cron 每日台北 17:00 呼叫；掃明天退租預約 → 排今天 18:00 提醒。需共享密鑰。
+  // 預約前一日提醒掃描：pg_cron 每日台北 17:00 呼叫；掃明天「退租＋續約」預約 → 排今天 18:00 提醒。需共享密鑰。
   app.post("/api/outreach/scan-checkout", async (req, res) => {
     const expected = process.env.OUTREACH_RUN_SECRET;
     if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
@@ -111,9 +111,10 @@ async function startServer() {
       return res.status(401).json({ error: "unauthorized" });
     }
     try {
-      const { scanCheckoutReminders } = await import("./routers/property/outreachHandlers");
-      const result = await scanCheckoutReminders();
-      return res.json(result);
+      const { scanCheckoutReminders, scanRenewalReminders } = await import("./routers/property/outreachHandlers");
+      const checkout = await scanCheckoutReminders();
+      const renewal = await scanRenewalReminders();
+      return res.json({ checkout, renewal });
     } catch (err: any) {
       console.error("[outreach] scan-checkout error:", err?.message || err);
       return res.status(500).json({ error: err?.message || "error" });

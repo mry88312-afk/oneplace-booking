@@ -143,5 +143,35 @@ begin
 end;
 $function$;
 
--- 註：發送前的即時退租查核在程式端 runOutreach()（server/routers/property/outreachHandlers.ts），
--- 對 rule 卡在 push 前再查一次 move_out_date，涵蓋「排程與 recompute 之間才退租」的同日空窗。
+-- 註：發送前的即時查核在程式端 runOutreach()（server/routers/property/outreachHandlers.ts），
+-- 對 rule 卡在 push 前再查一次「退租日 或 同房有更新合約」，涵蓋 recompute 與發送之間的同日空窗。
+
+
+-- P94（2026-07）續約前一日提醒（比照退租的 checkout_d1）----------------------------
+-- 續約預約也要在「前一天」發提醒。沿用退租那條管線：pg_cron(台北17:00)→trigger_scan_checkout()
+-- →POST /api/outreach/scan-checkout（已改為同時掃 退租＋續約）→掃 TiDB「台北明天」的 confirmed
+-- 續約預約→插 rule_key='renewal_d1'、send_at 今天18:00→dispatch_due 發送。程式端見
+-- scanRenewalReminders()/scanBookingDayBeforeReminders()。不需新增 pg_cron。
+
+-- trigger_basis 的 CHECK 需允許 'booking_renewal'
+alter table outreach.rule drop constraint rule_trigger_basis_check;
+alter table outreach.rule add constraint rule_trigger_basis_check
+  check (trigger_basis = any (array['contract_start','contract_end','booking_checkout','booking_renewal']));
+
+-- 新增規則卡 renewal_d1（續約前一日提醒）
+insert into outreach.rule (key, label, trigger_basis, offset_days, send_time, auto_confirm, enabled, sort_order, card_template)
+values (
+  'renewal_d1', '續約前一日提醒', 'booking_renewal', -1, '18:00', true, true, 6,
+  '{"type":"bubble","size":"mega","styles":{"footer":{"separator":false}},"body":{"type":"box","layout":"vertical","spacing":"md","paddingAll":"20px","contents":[
+     {"type":"text","text":"明天續約提醒 📄","size":"md","weight":"bold","color":"#222222","wrap":true},
+     {"type":"text","text":"{{tenant_name}} 您好，提醒您明天 {{booking_date}} {{booking_time}} 有續約專員預約","size":"sm","color":"#888888","margin":"xs","wrap":true},
+     {"type":"separator","color":"#EEEEEE","margin":"md"},
+     {"type":"box","layout":"vertical","margin":"md","paddingAll":"10px","cornerRadius":"8px","backgroundColor":"#E8F0E4","contents":[
+       {"type":"text","text":"🔔 請攜帶身分證件、備妥續約相關資料。若需改期或有任何問題，請直接在官方帳號留言給小幫手。","size":"xs","color":"#33691E","wrap":true}
+     ]}
+  ]}}'::jsonb
+)
+on conflict (key) do update set
+  label=excluded.label, trigger_basis=excluded.trigger_basis, offset_days=excluded.offset_days,
+  send_time=excluded.send_time, auto_confirm=excluded.auto_confirm, enabled=excluded.enabled,
+  card_template=excluded.card_template, updated_at=now();
