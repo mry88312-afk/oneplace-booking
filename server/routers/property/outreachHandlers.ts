@@ -468,39 +468,46 @@ const SCHEDULE_COLS =
 
 /** 合約到期(≤thresholdDays 天或已過期)＋沒預約續約/退租 的名單（跨 Supabase 合約 × TiDB 預約）。
  *
- * 判斷「還在住、合約快到/剛過期」不能看 Ragic 的 存在/取消：那是公式，過期或退租都會變「取消」。
- * 改用可靠訊號：取每位租客「最新一份合約」(依到期日) → 退租日(move_out_date)為空 → 落在到期視窗。
- * 這樣過期自動變取消、但退租日仍空的續住租客（例：游佩恩）會被抓到；真的退租(退租日有值)則排除。
+ * 以「房間」為單位（案場+房號），不是以「人」——因為業務在乎的是「這間房是否沒有有效合約」。
+ * 續約會另開一份「新 tenant_id、新合約」（renewal_parent_id 也是 null），所以用「人的最新合約」
+ * 會抓到舊的過期合約、看不到本人已在新約下續住（誤報）。改取「每間房最新開始日的合約」：
+ *   · 房內最新合約仍有效/未到期（本人續約 or 別人接手）→ 不抓（房有合約）。
+ *   · 房內最新合約已到期 + 退租日(move_out_date)為空 + 無更新合約 → 這人還沒續約也沒退租 → 抓。
+ *   · 退租日有值 → 已退租（退租時一定回寫退租日，可靠）→ 不抓。
+ * 之後再用 TiDB 預約表排除「已線上預約續約/退租」者（如游佩恩/林芬郃）。
+ * 房間鍵：房號(1014736) → 無房號用 unit_id → 再無則以合約自成一房（整租/無房號 fallback）。
  * 回溯下限 90 天：避免撈到早已離開、只是沒補退租日的陳年合約。
  */
 const RENEWAL_DUE_LOOKBACK_DAYS = 90;
 async function scanRenewalDueList(thresholdDays: number) {
   const pool = await sbQuery<any>(
-    `with latest as (
-       select distinct on (pa.tenant_id)
-              pa.tenant_id, tc.contract_no, tc.end_date, tc.move_out_date,
-              tc.status, tc.property_id, tc.unit_id
-         from contract.tenant_contract_parties pa
-         join contract.tenant_contracts tc on tc.id = pa.tenant_contract_id
+    `with room_latest as (
+       select distinct on (tc.property_id, coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no))
+              tc.id, tc.contract_no, tc.end_date, tc.move_out_date, tc.status,
+              tc.property_id, tc.unit_id, tc.legacy_snapshot->>'1014736' as room_label
+         from contract.tenant_contracts tc
         where tc.deleted_at is null
-        order by pa.tenant_id, tc.end_date desc nulls last, tc.start_date desc
+        order by tc.property_id,
+                 coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no),
+                 tc.start_date desc nulls last, tc.end_date desc nulls last
      )
      select t.line_uid, t.primary_name, t.primary_phone,
-            l.contract_no, to_char(l.end_date,'YYYY-MM-DD') as end_date,
-            (l.end_date - current_date) as days_left,
-            p.short_name as property, u.unit_no as room,
+            rl.contract_no, to_char(rl.end_date,'YYYY-MM-DD') as end_date,
+            (rl.end_date - current_date) as days_left,
+            p.short_name as property, coalesce(u.unit_no, rl.room_label) as room,
             p.ownership_region as region, p.hq_internal_category as internal_cat,
-            l.status as contract_status
-       from latest l
-       join contract.tenants t on t.id = l.tenant_id
-       left join property.properties p on p.id = l.property_id
-       left join property.units u on u.id = l.unit_id
+            rl.status as contract_status
+       from room_latest rl
+       join contract.tenant_contract_parties pa on pa.tenant_contract_id = rl.id
+       join contract.tenants t on t.id = pa.tenant_id
+       left join property.properties p on p.id = rl.property_id
+       left join property.units u on u.id = rl.unit_id
       where t.line_uid is not null
-        and l.move_out_date is null
-        and l.end_date is not null
-        and l.end_date <= current_date + $1::int
-        and l.end_date >= current_date - $2::int
-      order by p.ownership_region nulls last, l.end_date`,
+        and rl.move_out_date is null
+        and rl.end_date is not null
+        and rl.end_date <= current_date + $1::int
+        and rl.end_date >= current_date - $2::int
+      order by p.ownership_region nulls last, rl.end_date`,
     [thresholdDays, RENEWAL_DUE_LOOKBACK_DAYS],
   );
   // TiDB：已 confirmed 續約/退租 的 uid（沿用 hasActiveBookingSuppress 邏輯，一次撈全部）
