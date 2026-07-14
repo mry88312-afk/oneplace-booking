@@ -14,6 +14,49 @@ import {
   resolveTemplateBundle,
   RAGIC_API_KEY_VALUE,
 } from "./bookingHelpers";
+import { resolveResidences, getRenewalWindow, type Residence } from "../../db/supabaseClient";
+
+/** 組 verify 回應。
+ *  P96：房間改用 residences（Supabase 反查 legacy_snapshot 1015116，含主客2/共同承租的正確合約）；
+ *  抓不到（Supabase 未設定/查空/新約還沒鏡像）就優雅降級回舊的 extractTenantInfo 值（對主客1 仍正確）。
+ *  一人多份有效約時回傳整個 residences，讓前端出「選房間」；每份補上 contractRecordId 與（renewal）續約視窗，
+ *  供選擇器切換時直接套用，不必再打一次 verify。 */
+async function finalizeVerify(
+  template: any,
+  info: ReturnType<typeof extractTenantInfo>,
+  residences: Residence[],
+) {
+  for (const r of residences) {
+    r.contractRecordId = await lookupLatestContractRecordId(r.contractNo);
+    if (template.projectId === "renewal") r.renewalWindow = await getRenewalWindow(r.contractNo);
+  }
+  const primary = residences[0];
+  const roomNumber = primary?.room || info.roomNumber;
+  const propertyName = primary?.property || info.propertyName;
+  const contractNo = primary?.contractNo || info.contractId || null;
+  const contractRecordId =
+    primary?.contractRecordId ?? (contractNo ? await lookupLatestContractRecordId(contractNo) : null);
+  const renewalWindow =
+    template.projectId === "renewal"
+      ? (primary?.renewalWindow ?? (contractNo ? await getRenewalWindow(contractNo) : null))
+      : null;
+
+  return {
+    tenantName: info.tenantName,
+    roomNumber,
+    propertyName,
+    address: info.address,
+    phone: info.phone,
+    email: info.email,
+    job: info.job,
+    templateId: template.id,
+    templateType: template.templateType,
+    contractRecordId,
+    contractNo,
+    renewalWindow,
+    residences,
+  };
+}
 
 export async function handleVerifyTenantUid(input: {
   projectId: string;
@@ -89,30 +132,10 @@ export async function handleVerifyTenantUid(input: {
     ragicId: info.ragicId,
   });
 
-  const contractRecordId = await lookupLatestContractRecordId(info.contractId);
-  const renewalWindow = await fetchRenewalWindowIfNeeded(template.projectId, info.contractId);
-
-  return {
-    tenantName: info.tenantName,
-    roomNumber: info.roomNumber,
-    propertyName: info.propertyName,
-    address: info.address,
-    phone: info.phone,
-    email: info.email,
-    job: info.job,
-    templateId: template.id,
-    templateType: template.templateType,
-    contractRecordId,
-    contractNo: info.contractId || null,
-    renewalWindow,
-  };
-}
-
-/** 線上續約 (projectId=renewal) 才打 Supabase 抓合約到期日視窗；其他專案回 null 不增加延遲。 */
-async function fetchRenewalWindowIfNeeded(projectId: string, contractNo: string) {
-  if (projectId !== "renewal" || !contractNo) return null;
-  const { getRenewalWindow } = await import("../../db/supabaseClient");
-  return getRenewalWindow(contractNo);
+  // P96：用 line_uid（換電話）反查該人所有有效合約的房間（含主客2）；info.phone 當備援 key。
+  const residences = await resolveResidences({ lineUid: input.uid, phone: info.phone });
+  console.log("[Booking-Verify] residences:", residences.length, residences.map((r) => `${r.contractNo}:${r.room}`).join(" | "));
+  return await finalizeVerify(template, info, residences);
 }
 
 export async function handleVerifyByPhone(input: {
@@ -180,21 +203,8 @@ export async function handleVerifyByPhone(input: {
     }
   }
 
-  const contractRecordId = await lookupLatestContractRecordId(info.contractId);
-  const renewalWindow = await fetchRenewalWindowIfNeeded(template.projectId, info.contractId);
-
-  return {
-    tenantName: info.tenantName,
-    roomNumber: info.roomNumber,
-    propertyName: info.propertyName,
-    address: info.address,
-    phone: info.phone,
-    email: info.email,
-    job: info.job,
-    templateId: template.id,
-    templateType: template.templateType,
-    contractRecordId,
-    contractNo: info.contractId || null,
-    renewalWindow,
-  };
+  // P96：用租客輸入的電話（正規化過）反查所有有效合約的房間（含主客2）；info.phone 當備援。
+  const residences = await resolveResidences({ phone: normalizedPhone || info.phone, lineUid: input.uid });
+  console.log("[Booking-Phone] residences:", residences.length, residences.map((r) => `${r.contractNo}:${r.room}`).join(" | "));
+  return await finalizeVerify(template, info, residences);
 }

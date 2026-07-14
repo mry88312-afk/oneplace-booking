@@ -7,9 +7,9 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  Clock, CheckCircle2, ChevronLeft, Loader2, AlertCircle,
+  Clock, CheckCircle2, ChevronLeft, ChevronRight, Loader2, AlertCircle,
   MapPin, Upload, FileText, X, Globe, Phone, User, CalendarPlus,
-  AlertTriangle, XCircle,
+  AlertTriangle, XCircle, Home,
 } from "lucide-react";
 import {
   BookingContainer, SuccessAnimation, LiffFailedAutoRedirect,
@@ -86,6 +86,57 @@ export function VerifyView({
               <Button variant="outline" className="rounded-full" onClick={handleVerify}>重試</Button>
             </div>
           )}
+        </div>
+      </div>
+    </BookingContainer>
+  );
+}
+
+// ─── Select Room View ─────────────────────────────────────────────────────────
+// P96：一人有多筆有效合約（例如同時是某房主客2＋另一房主客1）時，讓租客選這次要處理哪一間，
+//   避免自動抓「最新那份」而退錯/續錯房。residences 由 verify 回傳（Supabase legacy_snapshot 反查）。
+
+interface SelectRoomViewProps {
+  templateType: string;
+  residences: Array<{ contractNo: string; room: string; property: string | null; tenantCount: number }>;
+  onPick: (index: number) => void;
+}
+
+export function SelectRoomView({ templateType, residences, onPick }: SelectRoomViewProps) {
+  return (
+    <BookingContainer>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6">
+            <div className="w-14 h-14 bg-[#6B8E6B] rounded-full flex items-center justify-center mx-auto mb-4">
+              <Home className="h-7 w-7 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">選擇要{templateType}的房間</h1>
+            <p className="text-sm text-gray-500 mt-2">您名下有多筆有效合約，請選擇這次要{templateType}的房間</p>
+          </div>
+          <div className="space-y-3">
+            {residences.map((r, i) => (
+              <button
+                key={r.contractNo || i}
+                type="button"
+                className="w-full text-left px-5 py-4 rounded-lg border-2 border-[#6B8E6B]/30 hover:border-[#6B8E6B] hover:bg-[#6B8E6B]/5 transition-all"
+                onClick={() => onPick(i)}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-base font-bold text-gray-900">{r.room || "—"}</div>
+                    <div className="text-sm text-gray-500 mt-0.5">
+                      {r.property || ""}{r.contractNo ? ` · ${r.contractNo}` : ""}
+                    </div>
+                    {r.tenantCount > 1 && (
+                      <div className="text-xs text-gray-400 mt-1">共同承租（{r.tenantCount} 人）</div>
+                    )}
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-[#6B8E6B] shrink-0" />
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </BookingContainer>

@@ -174,7 +174,7 @@ export function BookingErrorScreen({ message }: { message?: string }) {
   );
 }
 
-export type PageView = "verify" | "phone" | "register" | "remittance" | "calendar" | "slots" | "instruction" | "form" | "success" | "cancel";
+export type PageView = "verify" | "phone" | "register" | "selectRoom" | "remittance" | "calendar" | "slots" | "instruction" | "form" | "success" | "cancel";
 
 // ─── 條件式表單欄位（續約「租期 → 展延」）──────────────────────────────────
 // locked template 的欄位可附帶 showWhen / optionsWhen；渲染器（顯示/選項）與

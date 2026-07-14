@@ -4,6 +4,7 @@ export {
   VerifyView,
   PhoneView,
   RegisterView,
+  SelectRoomView,
   CalendarViewPage,
   SlotsView,
   InstructionView,

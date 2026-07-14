@@ -11,9 +11,20 @@ import {
   type PageView,
 } from "@/components/booking";
 import {
-  VerifyView, PhoneView, RegisterView, RemittanceView,
+  VerifyView, PhoneView, RegisterView, RemittanceView, SelectRoomView,
   CalendarViewPage, SlotsView, InstructionView, FormView, SuccessView, CancelView,
 } from "@/components/booking";
+
+// P96：verify 回傳的「有效合約房間」清單（含主客2/共同承租）；一人多份時讓租客選。
+interface Residence {
+  contractNo: string;
+  room: string;
+  property: string | null;
+  propertyId: string | null;
+  tenantCount: number;
+  contractRecordId?: number | null;
+  renewalWindow?: any;
+}
 
 export default function BookingPublic() {
   const params = useParams<{ projectId: string }>();
@@ -75,6 +86,7 @@ export default function BookingPublic() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
   const [contractRecordId, setContractRecordId] = useState<number | null>(null);
+  const [residences, setResidences] = useState<Residence[]>([]); // P96：多份有效合約時給選房間用
   // P84 線上續約：合約到期日視窗（verify 時抓）+ 租客選的到期日 + 合約編號
   const [renewalWindow, setRenewalWindow] = useState<any>(null);
   const [renewalEndDate, setRenewalEndDate] = useState("");
@@ -175,6 +187,41 @@ export default function BookingPublic() {
     if (rw && rw.ok && rw.defaultDate) setRenewalEndDate(rw.defaultDate);
   };
 
+  // P96：verify 後的導頁（付款設定 / 指定時段 / 選日期）— 由 onSuccess 與「選房間」共用。
+  const proceedAfterVerify = () => {
+    if (needsRemittance(template) && !remittanceDone) setView("remittance");
+    else if (isPresetMode && presetSlotQuery.data) jumpToPresetForm(presetSlotQuery.data, template);
+    else setView("calendar");
+  };
+
+  // P96：套用租客選的（或唯一的）residence — 覆寫房間/案場/合約，及 renewal 視窗。
+  const applyResidence = (r: Residence) => {
+    setRoomNumber(r.room || "");
+    setPropertyName(r.property || "");
+    setContractNo(r.contractNo || "");
+    setContractRecordId(r.contractRecordId ?? null);
+    if (r.renewalWindow) {
+      setRenewalWindow(r.renewalWindow);
+      if (r.renewalWindow.ok && r.renewalWindow.defaultDate) setRenewalEndDate(r.renewalWindow.defaultDate);
+    }
+  };
+
+  // P96：verify 成功後接住 residences。回傳 true=可直接繼續導頁；false=要先選房間（已切到 selectRoom）。
+  const handleResidences = (data: any): boolean => {
+    const list: Residence[] = Array.isArray(data?.residences) ? data.residences : [];
+    setResidences(list);
+    if (list.length > 1) { setView("selectRoom"); return false; }
+    return true;
+  };
+
+  // P96：租客在「選房間」選了一間 → 套用後接續原本流程。
+  const handlePickResidence = (index: number) => {
+    const r = residences[index];
+    if (!r) return;
+    applyResidence(r);
+    proceedAfterVerify();
+  };
+
   const verifyRetryRef = useRef(0);
   const verifyMutation = trpc.booking.verifyTenantUid.useMutation({
     onSuccess: (data) => {
@@ -187,14 +234,12 @@ export default function BookingPublic() {
       setVerifiedEmail((data as any).email || "");
       setVerifiedJob((data as any).job || "");
       console.log("[BOOKING] verify success — isPresetMode:", isPresetMode, "presetSlot.data:", !!presetSlotQuery.data, "presetT:", presetT);
-      if (needsRemittance(template) && !remittanceDone) {
-        setView("remittance");
-      } else if (isPresetMode && presetSlotQuery.data) {
-        jumpToPresetForm(presetSlotQuery.data, template);
-      } else {
-        if (isPresetMode) console.log("[BOOKING] presetSlot 尚未回來 → 先進 calendar，等 useEffect 補救");
-        setView("calendar");
+      // P96：多份有效合約（主客2/共同承租）先讓租客選房間，選完才導頁
+      if (!handleResidences(data)) { setIsVerifying(false); return; }
+      if (isPresetMode && !(needsRemittance(template) && !remittanceDone) && !presetSlotQuery.data) {
+        console.log("[BOOKING] presetSlot 尚未回來 → 先進 calendar，等 useEffect 補救");
       }
+      proceedAfterVerify();
       setIsVerifying(false);
     },
     onError: (err) => {
@@ -230,13 +275,9 @@ export default function BookingPublic() {
       setVerifiedPhone((data as any).phone || phoneInput.trim());
       setVerifiedEmail((data as any).email || "");
       setVerifiedJob((data as any).job || "");
-      if (needsRemittance(template) && !remittanceDone) {
-        setView("remittance");
-      } else if (isPresetMode && presetSlotQuery.data) {
-        jumpToPresetForm(presetSlotQuery.data, template);
-      } else {
-        setView("calendar");
-      }
+      // P96：多份有效合約（主客2/共同承租）先讓租客選房間，選完才導頁
+      if (!handleResidences(data)) { setIsVerifying(false); return; }
+      proceedAfterVerify();
       setIsVerifying(false);
     },
     onError: (err) => {
@@ -517,6 +558,12 @@ export default function BookingPublic() {
 
   const handleConfirmBooking = () => {
     if (!confirmedSlot) return;
+    // P95 安全網：退租/續約 沒抓到房間就擋下（主客2/共同承租會發生），不讓空房號送出而產生空白日曆單。
+    const needsRoom = template?.templateType === "退租" || template?.templateType === "續約";
+    if (needsRoom && !roomNumber.trim()) {
+      toast.error("無法確認您的房間，可能因為您是合約的第二位租客，請聯繫小幫手協助 🙏");
+      return;
+    }
     if (template?.fields) {
       for (const field of template.fields) {
         if (field.fieldType === "description" || field.fieldType === "line_uid" || field.fieldType === "inbox_url") continue;
@@ -634,6 +681,7 @@ export default function BookingPublic() {
   if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
   if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;
   if (view === "register") return <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />;
+  if (view === "selectRoom") return <SelectRoomView templateType={template.templateType} residences={residences} onPick={handlePickResidence} />;
   if (view === "remittance") return <RemittanceView template={template} name={tenantName} phone={verifiedPhone || phoneInput} existingEmail={verifiedEmail} existingJob={verifiedJob} uid={lineUserId || uid} onComplete={continueAfterRemittance} />;
   if (view === "calendar") return <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />;
   if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} isBooking={isBooking} />;

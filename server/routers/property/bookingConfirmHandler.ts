@@ -461,6 +461,27 @@ export async function handleConfirmBooking(
   const template = bundle.template;
   const isRenewal = template.templateType === "續約" || template.projectId === "renewal";
 
+  // P95 安全網：退租/續約 一定要有房間。主客2/共同承租抓不到房間時，roomNumber 會是空字串，
+  //   之前會靜默寫出一張「無房號」的退租/續約日曆任務（案場編號也連帶空白）。寧可擋下請租客聯繫，
+  //   也不要產生空白單。gate 在 templateType（退租/續約）而非 zod .min(1)，避免誤擋不需房號的其他預約類型。
+  const requiresRoom =
+    template.templateType === "退租" ||
+    template.templateType === "續約" ||
+    template.ragicTaskPath === "go-back/1";
+  if (requiresRoom && !input.roomNumber?.trim()) {
+    console.error("[Booking] 空房號攔截（P95）:", {
+      projectId: input.projectId,
+      templateType: template.templateType,
+      uid: input.uid,
+      tenantName: input.tenantName,
+      phone: input.phone || null,
+    });
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "無法確認您的房間資訊，可能因為您是合約的第二位租客，請聯繫小幫手協助預約 🙏",
+    });
+  }
+
   // 線上續約 合約期間：算出 開始日 / 到期日 / 是否展延，給「寫回 Ragic」與「確認卡」共用。
   // 策略：後端先重抓 Supabase 驗一次（不信前端）；若重抓沒取得（Supabase 當下抓不到/超時），
   //       就用「租客實際填的」開始日+到期日當後備 → 確保只要租客有選日期，卡片一定顯示、Ragic 一定寫。

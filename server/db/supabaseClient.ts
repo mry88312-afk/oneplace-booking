@@ -138,6 +138,76 @@ export async function getRenewalWindow(contractNo: string): Promise<RenewalWindo
   }
 }
 
+// ─── 房間解析：用 line_uid / 電話 反查該人所有有效合約的房間（含共同承租/主客2） ──────────
+// P96 背景：房間/共同承租只記在 Ragic 合約的 1015116(全體租客電話)；Supabase 的
+//   tenant_contract_parties 每份合約只有 ≤1 位租客（沒存共同承租），但整份 Ragic 合約有鏡像進
+//   tenant_contracts.legacy_snapshot(JSONB)。故改用 legacy_snapshot->'1015116' 反查電話 → 命中
+//   該人「當主客1 或主客2」的所有有效合約。一人可多份有效約 → 回傳陣列，呼叫端決定要不要讓租客選。
+export interface Residence {
+  contractNo: string;
+  room: string;              // 房號（優先用 Ragic 房間編號 1007552 全列，格式與退租日曆/現行流程一致）
+  property: string | null;   // 案場簡稱
+  propertyId: string | null; // property.properties.id
+  tenantCount: number;       // 該合約租客數（>1 = 共同承租）
+  contractRecordId?: number | null;     // go-back/22 合約記錄 id（由 verify handler 補；退租/續約回寫用）
+  renewalWindow?: RenewalWindow | null; // 只有 renewal 專案才填（每份合約各自的續約日期視窗）
+}
+
+/** 用 line_uid（先換電話）或直接用電話，反查所有有效合約的房間。抓不到/出錯一律回 []（呼叫端優雅降級回舊邏輯）。 */
+export async function resolveResidences(opts: { lineUid?: string; phone?: string }): Promise<Residence[]> {
+  if (!isSupabaseConfigured()) return [];
+  try {
+    let phone = (opts.phone || "").trim();
+    if (!phone && opts.lineUid) {
+      const rows = await sbQuery<{ p: string }>(
+        `select primary_phone as p from contract.tenants
+          where line_uid=$1 and primary_phone is not null and primary_phone<>'' limit 1`,
+        [opts.lineUid],
+      );
+      phone = rows[0]?.p || "";
+    }
+    if (!phone) return [];
+    const rows = await sbQuery<any>(
+      `select tc.contract_no,
+              coalesce(
+                nullif(array_to_string(array(select jsonb_array_elements_text(
+                   case when jsonb_typeof(tc.legacy_snapshot->'1007552')='array'
+                        then tc.legacy_snapshot->'1007552' else '[]'::jsonb end)), ', '), ''),
+                nullif(u.unit_no,''), nullif(u.room_code,''), nullif(tc.legacy_snapshot->>'1014736','')
+              ) as room,
+              p.short_name as property, p.id as property_id,
+              jsonb_array_length(case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
+                                      then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) as tenant_count
+         from contract.tenant_contracts tc
+         left join property.units u on u.id = tc.unit_id
+         left join property.properties p on p.id = tc.property_id
+        where tc.deleted_at is null and tc.move_out_date is null
+          and (tc.legacy_snapshot->>'1007778') = '存在'
+          and exists (
+            select 1 from jsonb_array_elements_text(
+              case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
+                   then tc.legacy_snapshot->'1015116' else '[]'::jsonb end
+            ) ph where regexp_replace(ph,'[^0-9]','','g') = regexp_replace($1,'[^0-9]','','g')
+          )
+        order by tc.start_date desc nulls last
+        limit 10`,
+      [phone],
+    );
+    return rows
+      .map((r) => ({
+        contractNo: r.contract_no || "",
+        room: r.room || "",
+        property: r.property || null,
+        propertyId: r.property_id || null,
+        tenantCount: Number(r.tenant_count) || 1,
+      }))
+      .filter((r) => r.room);
+  } catch (e: any) {
+    console.error("[resolveResidences] Supabase 查詢失敗:", e?.message);
+    return [];
+  }
+}
+
 export async function closeSupabasePool(): Promise<void> {
   if (_pool) {
     try {
