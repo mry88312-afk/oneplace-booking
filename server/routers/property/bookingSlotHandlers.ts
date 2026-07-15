@@ -119,6 +119,33 @@ async function getEventsBasedBusySlots(
   return busySlots;
 }
 
+// ─── 共用：計算單一規則在某天的「生效時段」 ────────────────────────────────
+/**
+ * 優先序（與各 handler 檔頭一致）：
+ *   weeklyHours[day] 為「當日總表硬上限」 > rule 自訂時段（僅能在上限內縮小）> template.dailyStart/End
+ *
+ * 重點：規則的 weeklyStartTime/EndTime 只能把時段「縮小」，
+ * 不能放寬到超出 weeklyHours 當日設定 —— 避免規則時段填太寬而開出總表以外的時段。
+ * 回傳零補位 "HH:MM"，可直接字典序比較。
+ */
+function resolveRuleTimeWindow(
+  rule: { weeklyStartTime?: string | null; weeklyEndTime?: string | null },
+  dayCap: { start: string; end: string } | null,
+  templateDailyStart: string,
+  templateDailyEnd: string,
+): { start: string; end: string } {
+  const defStart = dayCap ? dayCap.start : templateDailyStart;
+  const defEnd = dayCap ? dayCap.end : templateDailyEnd;
+  let start = rule.weeklyStartTime || defStart;
+  let end = rule.weeklyEndTime || defEnd;
+  // weeklyHours 為當日上限：規則時段只能縮不能放寬（取交集）
+  if (dayCap) {
+    if (start < dayCap.start) start = dayCap.start;
+    if (end > dayCap.end) end = dayCap.end;
+  }
+  return { start, end };
+}
+
 // ─── handleGetAvailableSlots（單日） ────────────────────────────────────────
 
 export async function handleGetAvailableSlots(input: {
@@ -155,16 +182,8 @@ export async function handleGetAvailableSlots(input: {
   try {
     const calendar = getCalendarClient();
 
-    // ═══ 時段設定優先級：weeklyHours > rule.weeklyStartTime > template.dailyStartTime ═══
-    let defaultStartTime = template.dailyStartTime;
-    let defaultEndTime = template.dailyEndTime;
-    if (weeklyHours) {
-      const dayConfig = weeklyHours[String(dayOfWeek)];
-      if (dayConfig) {
-        defaultStartTime = dayConfig.start;
-        defaultEndTime = dayConfig.end;
-      }
-    }
+    // ═══ 時段優先序：weeklyHours[day] 為當日硬上限 > rule 自訂時段（僅能在上限內縮小）> template.dailyStart/End ═══
+    const dayCap = weeklyHours ? (weeklyHours[String(dayOfWeek)] || null) : null;
 
     let globalStartH = 23, globalStartM = 59;
     let globalEndH = 0, globalEndM = 0;
@@ -172,8 +191,9 @@ export async function handleGetAvailableSlots(input: {
 
     for (let i = 0; i < matchingRules.length; i++) {
       const rule = matchingRules[i];
-      const rStartTime = (rule as any).weeklyStartTime || defaultStartTime;
-      const rEndTime = (rule as any).weeklyEndTime || defaultEndTime;
+      const { start: rStartTime, end: rEndTime } = resolveRuleTimeWindow(
+        rule as any, dayCap, template.dailyStartTime, template.dailyEndTime,
+      );
       const [sH, sM] = rStartTime.split(":").map(Number);
       const [eH, eM] = rEndTime.split(":").map(Number);
       ruleTimeRanges.set(i, { startH: sH, startM: sM, endH: eH, endM: eM });
@@ -352,20 +372,13 @@ export async function handleGetAvailableSlotsMultiDay(input: {
       if (dayConfig === null || dayConfig === undefined) continue;
     }
 
-    let defaultStartTime = template.dailyStartTime;
-    let defaultEndTime = template.dailyEndTime;
-    if (weeklyHours) {
-      const dayConfig = weeklyHours[String(dayOfWeek)];
-      if (dayConfig) {
-        defaultStartTime = dayConfig.start;
-        defaultEndTime = dayConfig.end;
-      }
-    }
+    const dayCap = weeklyHours ? (weeklyHours[String(dayOfWeek)] || null) : null;
 
     let startH = 23, startM = 59, endH = 0, endM = 0;
     for (const rule of matchingRules) {
-      const rStart = (rule as any).weeklyStartTime || defaultStartTime;
-      const rEnd = (rule as any).weeklyEndTime || defaultEndTime;
+      const { start: rStart, end: rEnd } = resolveRuleTimeWindow(
+        rule as any, dayCap, template.dailyStartTime, template.dailyEndTime,
+      );
       const [sH, sM] = rStart.split(":").map(Number);
       const [eH, eM] = rEnd.split(":").map(Number);
       if (sH < startH || (sH === startH && sM < startM)) { startH = sH; startM = sM; }
@@ -440,17 +453,13 @@ export async function handleGetAvailableSlotsMultiDay(input: {
     const timeMin = new Date(`${vd.date}T${vd.startTime}:00+08:00`);
     const timeMax = new Date(`${vd.date}T${vd.endTime}:00+08:00`);
 
-    let defaultStart = template.dailyStartTime;
-    let defaultEnd = template.dailyEndTime;
-    if (weeklyHours) {
-      const dc = weeklyHours[String(vd.dayOfWeek)];
-      if (dc) { defaultStart = dc.start; defaultEnd = dc.end; }
-    }
+    const dayCap = weeklyHours ? (weeklyHours[String(vd.dayOfWeek)] || null) : null;
     const ruleTimeRanges: Map<number, { startH: number; startM: number; endH: number; endM: number }> = new Map();
     for (let i = 0; i < vd.matchingRules.length; i++) {
       const rule = vd.matchingRules[i];
-      const rStart = (rule as any).weeklyStartTime || defaultStart;
-      const rEnd = (rule as any).weeklyEndTime || defaultEnd;
+      const { start: rStart, end: rEnd } = resolveRuleTimeWindow(
+        rule as any, dayCap, template.dailyStartTime, template.dailyEndTime,
+      );
       const [sH, sM] = rStart.split(":").map(Number);
       const [eH, eM] = rEnd.split(":").map(Number);
       ruleTimeRanges.set(i, { startH: sH, startM: sM, endH: eH, endM: eM });
