@@ -568,7 +568,7 @@ export async function handleConfirmBooking(
         // 注意：對話網址指向主系統的客服介面
         const inboxBase =
           process.env.MAIN_SYSTEM_INBOX_URL ||
-          "https://fieldopsdash-jmqd8ox8.manus.space/inbox";
+          "https://fieldops.zeabur.app/inbox";
         ragicData[field.ragicFieldId] = `${inboxBase}?uid=${input.uid}`;
         continue;
       }

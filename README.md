@@ -81,7 +81,7 @@ npm run dev
 | `DATABASE_URL` | TiDB Cloud 連線字串（記得帶 `?ssl=...`）|
 | `RAGIC_API_KEY` | 從主系統複製 |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Google Service Account 的 JSON 字串 |
-| `MAIN_SYSTEM_WEBHOOK_URL` | `https://fieldopsdash-jmqd8ox8.manus.space/api/booking/notify-line` |
+| `MAIN_SYSTEM_WEBHOOK_URL` | `https://fieldops.zeabur.app/api/booking/notify-line` |
 | `BOOKING_WEBHOOK_SECRET` | 隨機字串（兩邊都要一樣）|
 | `PORT` | `3000`（Zeabur 預設）|
 | `NODE_ENV` | `production` |
