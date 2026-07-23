@@ -80,7 +80,7 @@ const CHECKOUT: LockedBundle = {
       "5️⃣📸📸清理完後請拍床墊照片並回傳小幫手🎞\n\n" +
       "6️⃣公共費用：後續流在群組待帳單出來後跟小班長結清，如有特殊狀況另外說明\n\n" +
       "7️⃣如垃圾量過多，請自行找垃圾車丟棄，垃圾代收廠商是無法收取太多垃圾的，衍生的費用會向超量丟棄的室友索取喔!\n\n" +
-      "8️⃣費用計算基準日以退租當日為主，並請準備存摺照片，退租當下需上傳\n\n" +
+      "8️⃣費用計算基準日以退租當日為主，退款帳戶資訊已於預約時填寫，若有變更請告知小幫手\n\n" +
       "9️⃣若環境沒有恢復原況，會從押金扣掉2000元清潔打掃費用，請特別注意～\n" +
       "床墊若有難以清除的髒污，會另外收取清潔費，單人床墊3000元、雙人床墊3500元喔！\n\n" +
       "如果還在找房，可以參考一方的空房喔\n" +
@@ -170,18 +170,62 @@ const CHECKOUT: LockedBundle = {
       sortOrder: 4,
       createdAt: LOCKED_EPOCH,
     },
+    // P100: 存摺改必填＋新增銀行代碼/帳號/戶名必填 — 退款帳戶資訊在預約時就收齊，
+    // 不再依賴人工看存摺照片補登（go-back/1 戶名/銀行代號/帳號常空著導致無法匯退款）
     {
       id: 270030,
       templateId: 1,
       fieldType: "file",
-      label: "可先上傳存摺喔，退租匯款需要",
-      isRequired: false,
+      label: "存摺封面照片",
+      isRequired: true,
       options: null,
       ragicFieldId: "1013889",
-      descriptionText: null,
+      descriptionText: "退租匯款需要，請上傳清晰的存摺封面（或網銀帳號截圖）",
       allowOther: false,
       selectionMode: "checkbox",
       sortOrder: 5,
+      createdAt: LOCKED_EPOCH,
+    },
+    {
+      id: 270032,
+      templateId: 1,
+      fieldType: "text",
+      label: "銀行代碼",
+      isRequired: true,
+      options: null,
+      ragicFieldId: "1013908",
+      descriptionText: "3碼，例：822 中國信託、013 國泰世華，存摺封面上找得到",
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 6,
+      createdAt: LOCKED_EPOCH,
+    },
+    {
+      id: 270033,
+      templateId: 1,
+      fieldType: "text",
+      label: "銀行帳號",
+      isRequired: true,
+      options: null,
+      ragicFieldId: "1013909",
+      descriptionText: "請照存摺上的帳號填寫，只填數字",
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 7,
+      createdAt: LOCKED_EPOCH,
+    },
+    {
+      id: 270034,
+      templateId: 1,
+      fieldType: "text",
+      label: "戶名",
+      isRequired: true,
+      options: null,
+      ragicFieldId: "1020829",
+      descriptionText: "帳戶戶名，需與存摺一致",
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 8,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -195,7 +239,7 @@ const CHECKOUT: LockedBundle = {
       descriptionText: "退租押金／帳單的匯款通知會寄到這個 email，請正確填寫",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 6,
+      sortOrder: 9,
       createdAt: LOCKED_EPOCH,
     },
   ],
