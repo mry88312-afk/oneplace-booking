@@ -176,6 +176,20 @@ const CHECKOUT: LockedBundle = {
     // P100: 存摺改必填＋新增銀行代碼/帳號/戶名必填 — 退款帳戶資訊在預約時就收齊，
     // 不再依賴人工看存摺照片補登（go-back/1 戶名/銀行代號/帳號常空著導致無法匯退款）
     {
+      id: 270035,
+      templateId: 1,
+      fieldType: "description",
+      label: "匯款資訊提醒",
+      isRequired: false,
+      options: null,
+      ragicFieldId: null,
+      descriptionText: "以下為匯款資訊，請確實填寫，如填寫錯誤會影響匯款時間",
+      allowOther: false,
+      selectionMode: "checkbox",
+      sortOrder: 5,
+      createdAt: LOCKED_EPOCH,
+    },
+    {
       id: 270030,
       templateId: 1,
       fieldType: "file",
@@ -183,10 +197,10 @@ const CHECKOUT: LockedBundle = {
       isRequired: true,
       options: null,
       ragicFieldId: "1013889",
-      descriptionText: "退租匯款需要，請上傳清晰的存摺封面（或網銀帳號截圖）",
+      descriptionText: "退租匯款需要，請上傳清晰的存摺封面",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 5,
+      sortOrder: 6,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -197,10 +211,10 @@ const CHECKOUT: LockedBundle = {
       isRequired: true,
       options: null,
       ragicFieldId: "1013908",
-      descriptionText: "銀行3碼＋分行4碼共7碼，例：8220123，存摺封面上找得到",
+      descriptionText: "銀行3碼＋分行4碼共7碼，例：8220123，如存摺沒有，需自行上網查詢",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 6,
+      sortOrder: 7,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -214,7 +228,7 @@ const CHECKOUT: LockedBundle = {
       descriptionText: "請照存摺上的帳號填寫，只填數字",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 7,
+      sortOrder: 8,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -228,7 +242,7 @@ const CHECKOUT: LockedBundle = {
       descriptionText: "帳戶戶名，需與存摺一致",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 8,
+      sortOrder: 9,
       createdAt: LOCKED_EPOCH,
     },
     {
@@ -242,7 +256,7 @@ const CHECKOUT: LockedBundle = {
       descriptionText: "退租押金／帳單的匯款通知會寄到這個 email，請正確填寫",
       allowOther: false,
       selectionMode: "checkbox",
-      sortOrder: 9,
+      sortOrder: 10,
       createdAt: LOCKED_EPOCH,
     },
   ],

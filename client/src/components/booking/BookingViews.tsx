@@ -676,7 +676,7 @@ export function FormView({
                     </div>
                   ) : (
                     <Button variant="outline" className="w-full h-11" onClick={() => fileInputRefs.current[field.label]?.click()} disabled={isUploading === field.label}>
-                      {isUploading === field.label ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />上傳中...</>) : (<><Upload className="h-4 w-4 mr-2" />選擇檔案</>)}
+                      {isUploading === field.label ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />上傳中...</>) : (<><Upload className="h-4 w-4 mr-2" />上傳圖檔</>)}
                     </Button>
                   )}
                 </div>
