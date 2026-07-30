@@ -290,7 +290,7 @@ async function startServer() {
     }
     if (!process.env.MAIN_SYSTEM_WEBHOOK_URL) {
       console.warn(
-        "[oneplace-booking] ⚠️  MAIN_SYSTEM_WEBHOOK_URL not set — LINE notify will be skipped",
+        "[oneplace-booking] ⚠️  MAIN_SYSTEM_WEBHOOK_URL not set — 使用預設站台 fieldops.zeabur.app",
       );
     }
   });

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Handler for confirmBooking procedure（Zeabur 拆分版）.
  *
  * 與主系統的差異：
@@ -14,102 +14,86 @@ import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap, resolveTemplateBu
 import { sbQuery } from "../../db/supabaseClient";
 
 /**
- * Fallback：直接打 LINE Messaging API push message
- * 當主系統 webhook 失敗（500/503/timeout/network error）時使用，
- * 確保即使主系統 MANUS 掛掉，租客還是能收到預約確認卡片。
+ * P102：所有對外 LINE 訊息一律經新站台（fieldops.zeabur.app）代發，禁止直打 LINE API。
+ * MANUS 已退役——env 若還殘留 manus.space 的網址一律忽略，改用站台預設值。
  */
-export async function pushLineDirect(
-  tenantUid: string,
-  flexMessage: any,
-): Promise<{ success: boolean; error?: string }> {
-  const token = process.env.LINE_MESSAGING_TENANT_ACCESS_TOKEN;
-  if (!token) {
-    return { success: false, error: "LINE_MESSAGING_TENANT_ACCESS_TOKEN not set" };
+const HUB_ORIGIN = "https://fieldops.zeabur.app";
+// TODO: 與站台 /api/line/relay 的 hardcode 同步；兩邊 env 都設好 BOOKING_WEBHOOK_SECRET 後移除
+const DEFAULT_WEBHOOK_SECRET = "ed291f55f85dd711d0d8ff6be096cb951ebe36a10efad71847dc5f00c19b0250";
+
+/** env 網址殘留 manus.space 時視同未設定（舊站已死，打過去只會 timeout）。 */
+function envUrl(name: string): string | undefined {
+  const v = process.env[name];
+  return v && !v.includes("manus.space") ? v : undefined;
+}
+
+/** notify-line webhook 網址（預約確認卡）。 */
+export function resolveNotifyUrl(): string {
+  return envUrl("MAIN_SYSTEM_WEBHOOK_URL") || `${HUB_ORIGIN}/api/booking/notify-line`;
+}
+
+/** 通用代發 relay 網址。 */
+function resolveRelayUrl(): string {
+  const explicit = envUrl("MANUS_LINE_RELAY_URL");
+  if (explicit) return explicit;
+  const notify = envUrl("MAIN_SYSTEM_WEBHOOK_URL");
+  if (notify) {
+    try { return new URL("/api/line/relay", notify).href; } catch {}
   }
-  try {
-    const resp = await fetch("https://api.line.me/v2/bot/message/push", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        to: tenantUid,
-        messages: [flexMessage],
-      }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      return { success: false, error: `LINE API ${resp.status}: ${text.slice(0, 200)}` };
-    }
-    return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message || String(err) };
-  }
+  return `${HUB_ORIGIN}/api/line/relay`;
 }
 
 /**
- * 直發 LINE（fallback 用）：把 payload 原封不動 POST 到 LINE 的 reply/push 端點。
+ * POST JSON 到站台，帶 webhook secret。5xx／網路錯誤自動重試（Zeabur 換版有短暫 502
+ * 空窗，見部署備忘），4xx 不重試（重打也不會好）。
  */
-async function directLineSend(
-  lineEndpoint: "reply" | "push",
-  payload: any,
-): Promise<{ success: boolean; error?: string }> {
-  const token = process.env.LINE_MESSAGING_TENANT_ACCESS_TOKEN;
-  if (!token) return { success: false, error: "LINE_MESSAGING_TENANT_ACCESS_TOKEN not set" };
-  try {
-    const resp = await fetch(`https://api.line.me/v2/bot/message/${lineEndpoint}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!resp.ok) {
+export async function postToHub(
+  url: string,
+  body: any,
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const secret = process.env.BOOKING_WEBHOOK_SECRET || DEFAULT_WEBHOOK_SECRET;
+  const delaysMs = [0, 3000, 10000];
+  let lastErr = "";
+  for (const delay of delaysMs) {
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (resp.ok) return { ok: true, status: resp.status };
       const text = await resp.text().catch(() => "");
-      return { success: false, error: `LINE ${lineEndpoint} ${resp.status}: ${text.slice(0, 200)}` };
+      lastErr = `${resp.status}: ${text.slice(0, 150)}`;
+      if (resp.status < 500) return { ok: false, status: resp.status, error: lastErr };
+    } catch (err: any) {
+      lastErr = err?.message || String(err);
     }
-    return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message || String(err) };
   }
+  return { ok: false, error: lastErr };
 }
 
 /**
- * 統一送訊：所有對外 LINE 訊息（push / reply）都走這裡。
- * 優先 POST 到 MANUS 通用代發 relay（MANUS_LINE_RELAY_URL，MANUS 原樣轉給 LINE + 記錄客服聊天）；
- * relay 未設定 / 失敗時 fallback 直發 LINE（保命；那幾則客服不會在 MANUS 看到）。
+ * 統一送訊：所有對外 LINE 訊息（push / reply）都走這裡，POST 到站台通用代發
+ * relay（站台原樣轉給 LINE + 記錄客服聊天）。站台掛掉時重試後放棄並留 error log，
+ * 不再 fallback 直發 LINE（P102 定調：訊息只能透過站台發出）。
  * payload = 原封不動要送 LINE 的 body（push={to,messages}；reply={replyToken,messages}）。
- * recordUid：給 MANUS 記錄客服聊天的對象；省略則 MANUS 不記錄（測試/內部通知用）。
+ * recordUid：給站台記錄客服聊天的對象；省略則不記錄（測試/內部通知用）。
  */
 export async function relayToLine(
   lineEndpoint: "reply" | "push",
   payload: any,
   opts?: { recordUid?: string },
 ): Promise<{ success: boolean; error?: string; via?: string }> {
-  // relay 網址：優先用 MANUS_LINE_RELAY_URL；沒設則由 MAIN_SYSTEM_WEBHOOK_URL 同源推導 /api/line/relay
-  let relayUrl = process.env.MANUS_LINE_RELAY_URL;
-  if (!relayUrl && process.env.MAIN_SYSTEM_WEBHOOK_URL) {
-    try { relayUrl = new URL("/api/line/relay", process.env.MAIN_SYSTEM_WEBHOOK_URL).href; } catch {}
-  }
-  const secret = process.env.BOOKING_WEBHOOK_SECRET;
-  if (relayUrl && secret) {
-    try {
-      const resp = await fetch(relayUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
-        body: JSON.stringify({ lineEndpoint, payload, recordUid: opts?.recordUid }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) return { success: true, via: "manus_relay" };
-      const text = await resp.text().catch(() => "");
-      console.warn(`[relay] MANUS relay ${resp.status}: ${text.slice(0, 150)} → fallback 直發`);
-    } catch (err: any) {
-      console.warn(`[relay] MANUS relay 例外: ${err?.message} → fallback 直發`);
-    }
-  }
-  const fb = await directLineSend(lineEndpoint, payload);
-  return { success: fb.success, error: fb.error, via: fb.success ? "direct_fallback" : "failed" };
+  const r = await postToHub(resolveRelayUrl(), {
+    lineEndpoint,
+    payload,
+    recordUid: opts?.recordUid,
+  });
+  if (r.ok) return { success: true, via: "hub_relay" };
+  console.error(`[relay] 站台代發失敗（依 P102 不直發 LINE，訊息未送出）: ${r.error}`);
+  return { success: false, error: r.error, via: "failed" };
 }
 
 /** push 便捷包裝：送單張卡片給某 uid（預設記錄客服聊天；record:false 則不記，測試/內部通知用）。 */
@@ -913,65 +897,25 @@ export async function handleConfirmBooking(
           if (!r.success) console.error("[Booking] 退租清潔卡推送失敗:", r.error);
         })().catch((e: any) => console.error("[Booking] 退租清潔卡推送例外:", e?.message));
       }
-      const webhookUrl = process.env.MAIN_SYSTEM_WEBHOOK_URL;
-      const webhookSecret = process.env.BOOKING_WEBHOOK_SECRET;
-
-      // 統一的 fallback 處理：webhook 失敗時直接打 LINE API
-      const fallbackToDirect = async (reason: string) => {
-        console.warn(
-          `[Booking] webhook 失敗(${reason})，fallback 直接打 LINE API for ${input.uid.slice(0, 8)}...`,
-        );
-        const fb = await pushLineDirect(input.uid, flexMessage);
-        if (fb.success) {
-          console.log(
-            `[Booking] LINE notify sent via FALLBACK direct push for ${input.uid.slice(0, 8)}...`,
-          );
+      // Fire-and-forget — 不阻擋預約成功 response。
+      // 一律走站台 notify-line webhook（站台發 LINE 卡片＋記錄 system message）；
+      // 失敗重試後放棄留 log，不 fallback 直發 LINE（P102 定調：只能透過站台發出）。
+      (async () => {
+        const r = await postToHub(resolveNotifyUrl(), {
+          tenantUid: input.uid,
+          bookingId: record.insertId,
+          flexMessage,
+        });
+        if (r.ok) {
+          console.log(`[Booking] LINE notify sent via webhook for ${input.uid.slice(0, 8)}...`);
         } else {
-          console.error(`[Booking] FALLBACK direct push 也失敗: ${fb.error}`);
+          console.error(
+            `[Booking] notify-line webhook 失敗（依 P102 不直發 LINE，確認卡未送出）: ${r.error}`,
+          );
         }
-      };
-
-      if (!webhookUrl || !webhookSecret) {
-        // webhook 沒設定 → 直接走 fallback
-        fallbackToDirect("env not configured").catch((e) =>
-          console.error("[Booking] fallback unexpected error:", e?.message || e),
-        );
-      } else {
-        // Fire-and-forget — 不阻擋預約成功 response
-        // 先嘗試走主系統 webhook（讓主系統管 recordSystemMessage 統一）
-        // 主系統失敗（500/503/timeout）就 fallback 直接打 LINE API
-        fetch(webhookUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Webhook-Secret": webhookSecret,
-          },
-          body: JSON.stringify({
-            tenantUid: input.uid,
-            bookingId: record.insertId,
-            flexMessage,
-          }),
-          signal: AbortSignal.timeout(8000),
-        })
-          .then(async (resp) => {
-            if (!resp.ok) {
-              const text = await resp.text().catch(() => "");
-              console.warn(
-                `[Booking] notify-line webhook returned ${resp.status}:`,
-                text.slice(0, 200),
-              );
-              await fallbackToDirect(`webhook ${resp.status}`);
-            } else {
-              console.log(
-                `[Booking] LINE notify sent via webhook for ${input.uid.slice(0, 8)}...`,
-              );
-            }
-          })
-          .catch(async (err) => {
-            console.error("[Booking] notify-line webhook failed:", err?.message);
-            await fallbackToDirect(`webhook exception: ${err?.message}`);
-          });
-      }
+      })().catch((e: any) =>
+        console.error("[Booking] notify-line unexpected error:", e?.message || e),
+      );
       }
     }
   } catch (err: any) {

@@ -3,7 +3,7 @@
  *
  * 與既有 push 共用 LINE_MESSAGING_TENANT_ACCESS_TOKEN（同一把 channel access token
  * 即可呼叫 rich menu 端點）。CRUD／alias／assign 走 api.line.me；圖片二進位上傳走
- * api-data.line.me 的 content 端點。錯誤一律拋出含 HTTP 狀態與訊息（比照 pushLineDirect 風格）。
+ * api-data.line.me 的 content 端點。錯誤一律拋出含 HTTP 狀態與訊息。
  */
 const API = "https://api.line.me";
 const API_DATA = "https://api-data.line.me";
