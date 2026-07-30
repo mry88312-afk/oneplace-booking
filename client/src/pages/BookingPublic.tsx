@@ -520,7 +520,7 @@ export default function BookingPublic() {
         blob = await compressImage(file);
       }
       // 編成 base64 data URL，存進 state，預約確認時一起送給 server
-      // server 收到後判斷是 data: 開頭就直接解碼上傳 Ragic（不繞 S3 / 不繞 MANUS）
+      // server 收到後判斷是 data: 開頭就直接解碼上傳 Ragic（不經額外上傳中繼）
       const dataUrl: string = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);

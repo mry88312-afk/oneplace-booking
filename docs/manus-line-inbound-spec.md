@@ -1,6 +1,6 @@
-# LINE 圖文選單查詢系統 — 完整對接說明（給 MANUS）
+# LINE 圖文選單查詢系統 — 完整對接說明（給 fieldops）
 
-> 一方生活 LINE 圖文選單「自助查詢」功能。租客點選單按鈕 → MANUS 轉發 → 一方生活伺服器查資料 → 用 replyToken 免費回 Flex 卡片。
+> 一方生活 LINE 圖文選單「自助查詢」功能。租客點選單按鈕 → fieldops 轉發 → 一方生活伺服器查資料 → 用 replyToken 免費回 Flex 卡片。
 
 ---
 
@@ -10,7 +10,7 @@
 租客 (LINE App)
   │  ① 點圖文選單按鈕（postback，data = mh:xxx）
   ▼
-LINE Platform ──② webhook 事件──▶ MANUS（LINE channel 唯一的 webhook 持有者）
+LINE Platform ──② webhook 事件──▶ fieldops（LINE channel 唯一的 webhook 持有者）
                                       │  ③ 偵測 data 以「mh:」開頭 → 原樣轉發（務必含 replyToken）
                                       ▼
                            一方生活伺服器  POST /api/line/inbound
@@ -27,17 +27,17 @@ LINE Platform ──② webhook 事件──▶ MANUS（LINE channel 唯一的 w
 **設計重點**
 - **為什麼用 postback（不是發訊息）**：LINE 會把 message 開頭的隱形字（如 `ㅤ`）吃掉；而且 message 內容租客「自己打字」也會觸發。postback 的 `data` 打不出來、不會被裁切，只有點按鈕才送出 → 最穩、不誤觸。
 - **為什麼用 reply（不是 push）**：`replyToken` 回覆**免額度**；push 會耗推播額度。
-- **MANUS 仍是 webhook 唯一持有者**（LINE 一個 channel 只能設一個 webhook），所以走「轉發」而非搬移。
+- **fieldops 是 webhook 唯一持有者**（LINE 一個 channel 只能設一個 webhook），所以走「轉發」而非搬移。
 
 ---
 
-## B. MANUS 要做的事（核心，只有一條新線）
+## B. fieldops 要做的事（核心，只有一條新線）
 
-當 LINE 事件進到 MANUS 既有的 webhook 時：
+當 LINE 事件進到 fieldops 的 webhook 時：
 
 1. **偵測**：`event.type === "postback"` 且 `event.postback.data` 以 `"mh:"` 開頭。
 2. **轉發**：把該 event 原樣 POST 到一方生活伺服器（見下方 Endpoint）。
-3. **鐵則**：這類 `mh:` 事件，**MANUS 不要自己回覆**（不要用掉 `replyToken`）→ 把 token 留給一方生活伺服器。其餘非 `mh:` 事件，MANUS **照原本邏輯**處理。
+3. **鐵則**：這類 `mh:` 事件，**fieldops 不要自己回覆**（不要用掉 `replyToken`）→ 把 token 留給一方生活伺服器。其餘非 `mh:` 事件，fieldops **照原本邏輯**處理。
 4. 對 LINE 照常回 `200 OK`（轉發是非同步的 fire-and-forget，不需等我方回應）。
 
 ### Endpoint
@@ -69,13 +69,13 @@ x-inbound-secret: <OUTREACH_RUN_SECRET 的值>
 ```
 > 也接受單筆 `{ "event": { ... } }`；多筆請放 `events` 陣列。
 
-### MANUS 端 pseudocode
+### fieldops 端 pseudocode
 ```python
 def on_line_webhook(body):
     for event in body["events"]:
         data = (event.get("postback") or {}).get("data", "")
         if event.get("type") == "postback" and data.startswith("mh:"):
-            # 轉發給一方生活，MANUS 不要自己回這筆
+            # 轉發給一方生活，fieldops 不要自己回這筆
             requests.post(
                 "https://<一方生活伺服器網域>/api/line/inbound",
                 headers={"Content-Type": "application/json",
@@ -84,11 +84,11 @@ def on_line_webhook(body):
                 timeout=5,
             )
         else:
-            handle_as_usual(event)   # MANUS 既有邏輯
+            handle_as_usual(event)   # fieldops 既有邏輯
     return 200
 ```
 
-### MANUS 可先用 curl 自測（替換網域與 secret、放一個真實 userId）
+### fieldops 可先用 curl 自測（替換網域與 secret、放一個真實 userId）
 ```bash
 curl -X POST "https://<一方生活伺服器網域>/api/line/inbound" \
   -H "Content-Type: application/json" \
@@ -111,11 +111,11 @@ curl -X POST "https://<一方生活伺服器網域>/api/line/inbound" \
 | `mh:repair` | 報修進度 | 報修清單：項目、狀態（🔧處理中／✅已完成）、單號 | Supabase `service.maintenance_tickets` |
 | `mh:faq` | 常見問題 | 靜態說明卡 | （內建） |
 
-> 之後要新增查詢，只要在選單加一顆 postback 按鈕、data 用新的 `mh:xxx`，後端再加一個對應查詢即可。MANUS 端的轉發邏輯**不用改**（只認 `mh:` 前綴）。
+> 之後要新增查詢，只要在選單加一顆 postback 按鈕、data 用新的 `mh:xxx`，後端再加一個對應查詢即可。fieldops 端的轉發邏輯**不用改**（只認 `mh:` 前綴）。
 
 ---
 
-## D. 一方生活伺服器收到後的行為（給你了解，MANUS 不需處理）
+## D. 一方生活伺服器收到後的行為（給你了解，fieldops 不需處理）
 
 1. 驗 `x-inbound-secret`（constant-time 比對，錯 → 401）。
 2. 寫一筆 log 到 `messaging.inbound_event`（可追溯租客點了什麼）。
@@ -127,23 +127,23 @@ curl -X POST "https://<一方生活伺服器網域>/api/line/inbound" \
 ---
 
 ## E. 時序與限制
-- `replyToken`：**約 1 分鐘、僅能用一次** → MANUS 收到事件要**立刻**轉發（不要排隊／批次延遲）。
+- `replyToken`：**約 1 分鐘、僅能用一次** → fieldops 收到事件要**立刻**轉發（不要排隊／批次延遲）。
 - 一方生活伺服器通常數秒內完成查詢並 reply。
 - `mh:rent` 走 Ragic 即時查詢，視 Ragic 反應時間，極端情況可能較慢但仍在 token 有效期內。
 
 ---
 
 ## F. 安全
-- `x-inbound-secret` 為共享密鑰，請只放在 MANUS 後端環境變數、勿外流。
+- `x-inbound-secret` 為共享密鑰，請只放在 fieldops 後端環境變數、勿外流。
 - 建議日後輪換 `OUTREACH_RUN_SECRET` 與 `ADMIN_PASSWORD`（目前為初始值）。
 
 ---
 
 ## G. 上線順序（一方生活這邊）
 1. **部署**：把 `/api/line/inbound` + 查詢引擎推上 Zeabur。
-2. 取得本服務 Zeabur 對外網域 → 填進 MANUS 的轉發設定。
+2. 取得本服務 Zeabur 對外網域 → 填進 fieldops 的轉發設定。
 3. 後台「圖文選單管理」→ `menu_01`、`menu_02` 按「發布」（LINE 選單按鈕換成 postback）。
-4. MANUS 加上 B 段的轉發那條線。
+4. fieldops 加上 B 段的轉發那條線。
 5. 用測試帳號點按鈕 → 收到 Flex 卡片即完成。
 
 ---
@@ -154,4 +154,4 @@ curl -X POST "https://<一方生活伺服器網域>/api/line/inbound" \
 - ✅ postback 機制（後端 + 產生器「查詢」按鈕型別）。
 - ✅ `menu_01`/`menu_02` 已轉 postback（generator_config + 點擊區）。
 - ✅ `/api/line/inbound` 路由 + reply — 本機 end-to-end 驗證通過。
-- ⏳ 待：部署上 Zeabur、MANUS 加轉發、後台發布選單、測試帳號實測。
+- ⏳ 待：部署上 Zeabur、fieldops 加轉發、後台發布選單、測試帳號實測。

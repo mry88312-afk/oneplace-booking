@@ -22,8 +22,8 @@ async function startServer() {
   // 壓縮 API 回應
   app.use(compression());
 
-  // tRPC body parser：confirmBooking 把檔案以 base64 data URL 一起送進來
-  // （取代原 /api/upload 中間站，避免 Zeabur 端要維護額外的存檔端點 / 不繞 MANUS）
+  // tRPC body parser：confirmBooking 把檔案以 base64 data URL 一起送進來。
+  // 不需要額外的上傳中繼服務。
   // 25 MB 足夠存摺照片、收據等場景；前端會先壓縮圖片才送
   app.use("/api/trpc", express.json({ limit: "25mb" }));
   app.use("/api/trpc", express.urlencoded({ limit: "25mb", extended: true }));
@@ -121,7 +121,7 @@ async function startServer() {
     }
   });
 
-  // 投遞 API：外部系統（Ragic/MANUS 等）把卡片排進統一發訊中樞。需共享密鑰；去重碼擋重複。
+  // 投遞 API：外部系統（例如 Ragic）把卡片排進統一發訊中樞。需共享密鑰；去重碼擋重複。
   app.post("/api/outreach/enqueue", async (req, res) => {
     const expected = process.env.OUTREACH_RUN_SECRET;
     if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
@@ -141,7 +141,7 @@ async function startServer() {
     }
   });
 
-  // LINE 入站轉發接收：MANUS 收到 LINE 訊息後，把「圖文選單觸發」(▶ 開頭) 的 event 轉發到這裡。
+  // LINE 入站轉發接收：fieldops 收到 LINE 訊息後，把「圖文選單觸發」(▶ 開頭) 的 event 轉發到這裡。
   // Header：x-inbound-secret（= OUTREACH_RUN_SECRET）；Body：{ events: [LINE event] } 或 { event: LINE event }。
   app.post("/api/line/inbound", async (req, res) => {
     const expected = process.env.OUTREACH_RUN_SECRET;
@@ -168,7 +168,7 @@ async function startServer() {
         const replyToken = ev?.replyToken || null;
         try {
           const rows = await sbQuery<any>(
-            `insert into messaging.inbound_event (source, line_uid, event_type, text, reply_token, raw) values ('manus_forward',$1,$2,$3,$4,$5::jsonb) returning id`,
+            `insert into messaging.inbound_event (source, line_uid, event_type, text, reply_token, raw) values ('fieldops_forward',$1,$2,$3,$4,$5::jsonb) returning id`,
             [uid, type, text, replyToken, JSON.stringify(ev)],
           );
           ids.push(rows[0]?.id != null ? Number(rows[0].id) : null);
@@ -210,7 +210,7 @@ async function startServer() {
     }
   });
 
-  // 週期詢問互動回饋：入住卡按鈕「開啟連結」打到這裡（公開頁、不經 LINE webhook / MANUS）。
+  // 週期詢問互動回饋：入住卡按鈕「開啟連結」打到這裡（公開頁，不經 LINE webhook）。
   // GET /f/:id?r=ok   → 記「住得舒服」+ 謝謝頁
   // GET /f/:id?r=help → 顯示後台可編輯的小問卷
   // POST /f/:id        → 記「需要協助」+ 通知後台名單 + 謝謝頁
@@ -282,16 +282,11 @@ async function startServer() {
     console.log(`[oneplace-booking] Environment: ${process.env.NODE_ENV || "development"}`);
     console.log(`[oneplace-booking] DATABASE_URL: ${process.env.DATABASE_URL ? "set" : "MISSING"}`);
     console.log(`[oneplace-booking] RAGIC_API_KEY: ${process.env.RAGIC_API_KEY ? "set" : "MISSING"}`);
-    console.log(`[oneplace-booking] MAIN_SYSTEM_WEBHOOK_URL: ${process.env.MAIN_SYSTEM_WEBHOOK_URL ? "set" : "MISSING"}`);
+    console.log(`[oneplace-booking] LINE_HUB_NOTIFY_URL: ${process.env.LINE_HUB_NOTIFY_URL ? "set" : "default fieldops"}`);
     console.log(`[oneplace-booking] BOOKING_WEBHOOK_SECRET: ${process.env.BOOKING_WEBHOOK_SECRET ? "set" : "MISSING"}`);
     console.log(`[oneplace-booking] GOOGLE_SERVICE_ACCOUNT_JSON: ${process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "set" : "MISSING"}`);
     if (!process.env.DATABASE_URL) {
       console.warn("[oneplace-booking] ⚠️  DATABASE_URL not set");
-    }
-    if (!process.env.MAIN_SYSTEM_WEBHOOK_URL) {
-      console.warn(
-        "[oneplace-booking] ⚠️  MAIN_SYSTEM_WEBHOOK_URL not set — 使用預設站台 fieldops.zeabur.app",
-      );
     }
   });
 }
