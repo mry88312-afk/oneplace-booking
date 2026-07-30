@@ -196,9 +196,9 @@ function buildRenewalNodeCard(_templateType: string) {
       {
         type: "box" as const, layout: "vertical" as const, flex: 1,
         contents: [
-          { type: "text" as const, text: s.title, size: "sm" as const, weight: "bold" as const, wrap: true, color: s.done ? "#A2ABA2" : "#333333", decoration: (s.done ? "line-through" : "none") as const },
+          { type: "text" as const, text: s.title, size: "sm" as const, weight: "bold" as const, wrap: true, color: s.done ? "#A2ABA2" : "#333333", decoration: s.done ? ("line-through" as const) : ("none" as const) },
           ...(s.desc ? [{ type: "text" as const, text: s.desc, size: "xs" as const, color: "#999999", wrap: true, margin: "xs" as const }] : []),
-          ...(s.subs ? s.subs.map((t, i) => ({ type: "text" as const, text: `${i + 1}. ${t}`, size: "xs" as const, color: "#666666", wrap: true, margin: (i === 0 ? "sm" : "xs") as const })) : []),
+          ...(s.subs ? s.subs.map((t, i) => ({ type: "text" as const, text: `${i + 1}. ${t}`, size: "xs" as const, color: "#666666", wrap: true, margin: i === 0 ? ("sm" as const) : ("xs" as const) })) : []),
           ...(s.note ? [{ type: "text" as const, text: `⏰ ${s.note}`, size: "xs" as const, color: "#C2553D", wrap: true, margin: "sm" as const }] : []),
         ],
       },
