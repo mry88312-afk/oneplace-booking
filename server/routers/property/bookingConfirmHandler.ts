@@ -84,12 +84,20 @@ export async function postToHub(
 export async function relayToLine(
   lineEndpoint: "reply" | "push",
   payload: any,
-  opts?: { recordUid?: string },
+  opts?: {
+    recordUid?: string;
+    supportEscalation?: {
+      source: "faq";
+      category: string;
+      question?: string;
+    };
+  },
 ): Promise<{ success: boolean; error?: string; via?: string }> {
   const r = await postToHub(resolveRelayUrl(), {
     lineEndpoint,
     payload,
     recordUid: opts?.recordUid,
+    supportEscalation: opts?.supportEscalation,
   });
   if (r.ok) return { success: true, via: "hub_relay" };
   console.error(`[relay] 站台代發失敗（依 P102 不直發 LINE，訊息未送出）: ${r.error}`);

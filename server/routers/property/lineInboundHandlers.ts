@@ -170,6 +170,28 @@ function faqAnswerRoute(category: FaqCategory, index: number) {
   return `mh:faq:answer:${category.slug}:${index}`;
 }
 
+function faqEscalationRoute(category: FaqCategory, index?: number) {
+  return `mh:faq:escalate:${category.slug}${index == null ? "" : `:${index}`}`;
+}
+
+export type FaqEscalationContext = {
+  source: "faq";
+  category: string;
+  question?: string;
+};
+
+export function getFaqEscalationContext(data: string): FaqEscalationContext | null {
+  const match = /^mh:faq:escalate:([a-z0-9-]+)(?::(\d+))?$/.exec(data);
+  if (!match) return null;
+  const category = FAQ_CATEGORIES.find((entry) => entry.slug === match[1]);
+  if (!category) return null;
+  if (match[2] == null) return { source: "faq", category: category.label };
+  const item = category.items[Number(match[2])];
+  return item
+    ? { source: "faq", category: category.label, question: item.question }
+    : null;
+}
+
 function buildFaqCategories() {
   return bubble("❓ 常見問題", [
     { type: "text", text: "請選擇問題分類", wrap: true, size: "sm", color: "#666666" },
@@ -184,6 +206,7 @@ function buildFaqQuestions(category: FaqCategory) {
     ...category.items.map((item, index) =>
       faqButton(item.question, faqAnswerRoute(category, index))),
   ], `${category.label}常見問題`, [
+    faqButton("都無法解決，請專員聯絡我", faqEscalationRoute(category), "primary"),
     faqButton("← 上一步：問題分類", "mh:faq"),
   ]);
 }
@@ -194,7 +217,34 @@ function buildFaqAnswer(category: FaqCategory, index: number) {
   return bubble(item.question, [
     { type: "text", text: item.answer, wrap: true, size: "sm", color: "#333333" },
   ], item.question, [
-    faqButton("← 上一步：問題列表", faqCategoryRoute(category), "primary"),
+    faqButton("都無法解決，請專員聯絡我", faqEscalationRoute(category, index), "primary"),
+    faqButton("← 上一步：問題列表", faqCategoryRoute(category)),
+    faqButton("回常見問題分類", "mh:faq"),
+  ]);
+}
+
+function buildFaqEscalationConfirmation(context: FaqEscalationContext) {
+  const category = FAQ_CATEGORIES.find((entry) => entry.label === context.category);
+  return bubble("🙋 已通知專員", [
+    {
+      type: "text",
+      text: "我們已將您的對話標示為優先求助，專員會盡快與您聯絡。",
+      wrap: true,
+      size: "sm",
+      color: "#333333",
+    },
+    {
+      type: "text",
+      text: context.question
+        ? `求助內容：${context.category}／${context.question}`
+        : `求助分類：${context.category}`,
+      wrap: true,
+      size: "xs",
+      color: "#777777",
+      margin: "md",
+    },
+  ], "已通知專員優先聯絡", [
+    ...(category ? [faqButton("繼續查看這個分類", faqCategoryRoute(category))] : []),
     faqButton("回常見問題分類", "mh:faq"),
   ]);
 }
@@ -202,6 +252,9 @@ function buildFaqAnswer(category: FaqCategory, index: number) {
 /** Build the complete static FAQ navigation without requiring tenant or database lookup. */
 export function buildFaqMessage(data: string) {
   if (data === "mh:faq") return buildFaqCategories();
+
+  const escalation = getFaqEscalationContext(data);
+  if (escalation) return buildFaqEscalationConfirmation(escalation);
 
   const categoryMatch = /^mh:faq:category:([a-z0-9-]+)$/.exec(data);
   if (categoryMatch) {
@@ -233,11 +286,13 @@ export async function handleInboundEvents(
     if (!data.startsWith("mh:")) continue;
     let msg: any;
     let matched: string | null = null;
+    let faqEscalation: FaqEscalationContext | null = null;
     let note: string | null = null; // 語意註記：tenant_not_found / query_error（即使有回覆友善訊息也記錄）
     try {
       const faqMessage = buildFaqMessage(data);
       if (faqMessage) {
         msg = faqMessage;
+        faqEscalation = getFaqEscalationContext(data);
       } else {
         if (!isSupabaseConfigured()) {
           out.push({ index: i, data, replied: false, reply_status: "no_db", reply_error: null, matched: null });
@@ -265,7 +320,10 @@ export async function handleInboundEvents(
     if (opts.debug) {
       reply_status = "debug";
     } else if (replyToken) {
-      const r = await relayToLine("reply", { replyToken, messages: [msg] }, { recordUid: uid });
+      const r = await relayToLine("reply", { replyToken, messages: [msg] }, {
+        recordUid: uid,
+        supportEscalation: faqEscalation ?? undefined,
+      });
       if (r.success) {
         replied = true;
         reply_status = "ok";

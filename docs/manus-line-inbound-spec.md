@@ -112,6 +112,7 @@ curl -X POST "https://<一方生活伺服器網域>/api/line/inbound" \
 | `mh:faq` | 常見問題分類 | 環境、生活公約、修繕、網路、垃圾、鑰匙 | （內建，來源：`常見問題.xlsx`） |
 | `mh:faq:category:<slug>` | 分類問題列表 | 該分類的可點選問題，底部可回分類 | （內建） |
 | `mh:faq:answer:<slug>:<index>` | 常見問題答案 | 完整回答，底部可回問題列表或分類 | （內建） |
+| `mh:faq:escalate:<slug>[:<index>]` | FAQ 轉人工 | 通知室友已標示優先，並把分類／題目傳給客服 Inbox | `oneplace-service` LINE relay |
 
 > 之後要新增查詢，只要在選單加一顆 postback 按鈕、data 用新的 `mh:xxx`，後端再加一個對應查詢即可。MANUS 端的轉發邏輯**不用改**（只認 `mh:` 前綴）。
 
