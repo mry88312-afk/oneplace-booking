@@ -5,6 +5,7 @@
  * 資料：合約/繳租帳號/報修 走 Supabase；繳租紀錄走 Ragic form 14（即時，by 虛擬帳號）。
  */
 import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
+import { FAQ_CATEGORIES, type FaqCategory } from "../../config/faqContent";
 import { relayToLine } from "./bookingConfirmHandler";
 
 const GREEN = "#2e4a36";
@@ -30,15 +31,19 @@ function row(label: string, value: string) {
     ],
   };
 }
-function bubble(title: string, bodyContents: any[], altText: string) {
+function bubble(title: string, bodyContents: any[], altText: string, footerContents?: any[]) {
+  const contents: any = {
+    type: "bubble",
+    header: { type: "box", layout: "vertical", backgroundColor: GREEN, paddingAll: "14px",
+      contents: [{ type: "text", text: title, color: "#ffffff", weight: "bold", size: "lg", wrap: true }] },
+    body: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "16px", contents: bodyContents },
+  };
+  if (footerContents?.length) {
+    contents.footer = { type: "box", layout: "vertical", spacing: "sm", paddingAll: "12px", contents: footerContents };
+  }
   return {
     type: "flex", altText,
-    contents: {
-      type: "bubble",
-      header: { type: "box", layout: "vertical", backgroundColor: GREEN, paddingAll: "14px",
-        contents: [{ type: "text", text: title, color: "#ffffff", weight: "bold", size: "lg" }] },
-      body: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "16px", contents: bodyContents },
-    },
+    contents,
   };
 }
 function txt(t: string) { return { type: "text", text: t }; }
@@ -147,11 +152,70 @@ async function buildRepair(uid: string, name: string) {
   return bubble("🛠️ 報修進度", blocks, "報修進度");
 }
 
-function buildFaq() {
+function faqButton(label: string, data: string, style: "primary" | "secondary" = "secondary") {
+  return {
+    type: "button",
+    style,
+    color: style === "primary" ? GREEN : undefined,
+    height: "sm",
+    action: { type: "postback", label, data, displayText: label },
+  };
+}
+
+function faqCategoryRoute(category: FaqCategory) {
+  return `mh:faq:category:${category.slug}`;
+}
+
+function faqAnswerRoute(category: FaqCategory, index: number) {
+  return `mh:faq:answer:${category.slug}:${index}`;
+}
+
+function buildFaqCategories() {
   return bubble("❓ 常見問題", [
-    { type: "text", text: "• 繳租：點選單「繳租帳號」查看專屬帳號\n• 繳費紀錄：點「繳租紀錄」\n• 合約資訊：點「我的合約」\n• 報修：點「修繕報修」提交、「修繕進度」查進度", wrap: true, size: "sm", color: "#333333" },
-    { type: "text", text: "其他問題請於此聊天室留言，小幫手會盡快回覆 🙏", wrap: true, size: "xs", color: "#999999", margin: "md" },
-  ], "常見問題");
+    { type: "text", text: "請選擇問題分類", wrap: true, size: "sm", color: "#666666" },
+    ...FAQ_CATEGORIES.map((category) =>
+      faqButton(`${category.icon} ${category.label}`, faqCategoryRoute(category))),
+  ], "常見問題分類");
+}
+
+function buildFaqQuestions(category: FaqCategory) {
+  return bubble(`${category.icon} ${category.label}`, [
+    { type: "text", text: "請點選想了解的問題", wrap: true, size: "sm", color: "#666666" },
+    ...category.items.map((item, index) =>
+      faqButton(item.question, faqAnswerRoute(category, index))),
+  ], `${category.label}常見問題`, [
+    faqButton("← 上一步：問題分類", "mh:faq"),
+  ]);
+}
+
+function buildFaqAnswer(category: FaqCategory, index: number) {
+  const item = category.items[index];
+  if (!item) return buildFaqQuestions(category);
+  return bubble(item.question, [
+    { type: "text", text: item.answer, wrap: true, size: "sm", color: "#333333" },
+  ], item.question, [
+    faqButton("← 上一步：問題列表", faqCategoryRoute(category), "primary"),
+    faqButton("回常見問題分類", "mh:faq"),
+  ]);
+}
+
+/** Build the complete static FAQ navigation without requiring tenant or database lookup. */
+export function buildFaqMessage(data: string) {
+  if (data === "mh:faq") return buildFaqCategories();
+
+  const categoryMatch = /^mh:faq:category:([a-z0-9-]+)$/.exec(data);
+  if (categoryMatch) {
+    const category = FAQ_CATEGORIES.find((entry) => entry.slug === categoryMatch[1]);
+    return category ? buildFaqQuestions(category) : buildFaqCategories();
+  }
+
+  const answerMatch = /^mh:faq:answer:([a-z0-9-]+):(\d+)$/.exec(data);
+  if (answerMatch) {
+    const category = FAQ_CATEGORIES.find((entry) => entry.slug === answerMatch[1]);
+    return category ? buildFaqAnswer(category, Number(answerMatch[2])) : buildFaqCategories();
+  }
+
+  return data.startsWith("mh:faq:") ? buildFaqCategories() : null;
 }
 
 // ── 路由 + 回覆 ──────────────────────────────────────────────
@@ -167,21 +231,28 @@ export async function handleInboundEvents(
     const uid: string | undefined = ev?.source?.userId;
     const replyToken: string | undefined = ev?.replyToken;
     if (!data.startsWith("mh:")) continue;
-    if (!isSupabaseConfigured()) { out.push({ index: i, data, replied: false, reply_status: "no_db", reply_error: null, matched: null }); continue; }
     let msg: any;
     let matched: string | null = null;
     let note: string | null = null; // 語意註記：tenant_not_found / query_error（即使有回覆友善訊息也記錄）
     try {
-      const t = uid ? await getTenant(uid) : null;
-      if (data === "mh:faq") msg = buildFaq();
-      else if (!t) { msg = txt("找不到您的租客資料，請確認是否已綁定，或聯繫小幫手 🙏"); note = "tenant_not_found"; }
-      else {
-        matched = t.primary_name || null;
-        if (data === "mh:contract") msg = await buildContract(t);
-        else if (data === "mh:va") msg = buildVA(t);
-        else if (data === "mh:rent") msg = await buildRent(t);
-        else if (data === "mh:repair") msg = await buildRepair(uid!, t.primary_name);
-        else continue;
+      const faqMessage = buildFaqMessage(data);
+      if (faqMessage) {
+        msg = faqMessage;
+      } else {
+        if (!isSupabaseConfigured()) {
+          out.push({ index: i, data, replied: false, reply_status: "no_db", reply_error: null, matched: null });
+          continue;
+        }
+        const t = uid ? await getTenant(uid) : null;
+        if (!t) { msg = txt("找不到您的租客資料，請確認是否已綁定，或聯繫小幫手 🙏"); note = "tenant_not_found"; }
+        else {
+          matched = t.primary_name || null;
+          if (data === "mh:contract") msg = await buildContract(t);
+          else if (data === "mh:va") msg = buildVA(t);
+          else if (data === "mh:rent") msg = await buildRent(t);
+          else if (data === "mh:repair") msg = await buildRepair(uid!, t.primary_name);
+          else continue;
+        }
       }
     } catch (e: any) {
       console.error("[inbound] query error:", data, e?.message);

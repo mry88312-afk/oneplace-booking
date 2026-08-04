@@ -109,7 +109,9 @@ curl -X POST "https://<一方生活伺服器網域>/api/line/inbound" \
 | `mh:rent` | 繳租紀錄 | 近期入帳：日期、金額（近 8 筆） | **Ragic** 中信入帳表（即時） |
 | `mh:va` | 繳租帳號 | 中國信託固定虛擬帳號 | Supabase `contract.tenants.virtual_account` |
 | `mh:repair` | 報修進度 | 報修清單：項目、狀態（🔧處理中／✅已完成）、單號 | Supabase `service.maintenance_tickets` |
-| `mh:faq` | 常見問題 | 靜態說明卡 | （內建） |
+| `mh:faq` | 常見問題分類 | 環境、生活公約、修繕、網路、垃圾、鑰匙 | （內建，來源：`常見問題.xlsx`） |
+| `mh:faq:category:<slug>` | 分類問題列表 | 該分類的可點選問題，底部可回分類 | （內建） |
+| `mh:faq:answer:<slug>:<index>` | 常見問題答案 | 完整回答，底部可回問題列表或分類 | （內建） |
 
 > 之後要新增查詢，只要在選單加一顆 postback 按鈕、data 用新的 `mh:xxx`，後端再加一個對應查詢即可。MANUS 端的轉發邏輯**不用改**（只認 `mh:` 前綴）。
 
