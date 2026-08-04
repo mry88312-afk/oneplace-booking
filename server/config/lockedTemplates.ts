@@ -99,7 +99,8 @@ const CHECKOUT: LockedBundle = {
       id: 270025,
       templateId: 1,
       fieldType: "checkbox",
-      label: "合約到期退租最多退還7天租金",
+      label:
+        "合約到期退租最多退還7天租金（如合約到期日為30號，室友預約20號退租，最多只退7天租金）",
       isRequired: true,
       options: ["同意"],
       ragicFieldId: null,
