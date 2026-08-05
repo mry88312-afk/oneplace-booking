@@ -57,17 +57,17 @@ const CHECKOUT: LockedBundle = {
     slotDurationMinutes: 60,
     bookableDaysAhead: 90,
     dailyStartTime: "13:00",
-    dailyEndTime: "20:30",
+    dailyEndTime: "21:00",
     bufferMinutes: 30,
     bufferDirection: "after",
     weeklyHours: {
       "0": null,                                    // 週日：不開
       "1": null,                                    // 週一：不開
-      "2": { start: "17:00", end: "20:30" },        // 週二
-      "3": { start: "13:00", end: "20:30" },        // 週三
-      "4": null,                                    // 週四：不開
+      "2": null,                                    // 週二：不開
+      "3": { start: "13:00", end: "21:00" },        // 週三
+      "4": { start: "13:00", end: "21:00" },        // 週四
       "5": null,                                    // 週五：不開
-      "6": { start: "13:00", end: "20:30" },        // 週六
+      "6": { start: "13:00", end: "21:00" },        // 週六
     },
     instructionEnabled: true,
     instructionText:
@@ -265,52 +265,13 @@ const CHECKOUT: LockedBundle = {
     {
       id: 300017,
       templateId: 1,
-      days: [2, 3, 4, 5, 6],
-      calendarId:
-        "3ba1f394a1086c1ee687503325193d6d01ab1b0b0d773b4c8f9b043a58bde88e@group.calendar.google.com",
-      calendarLabel: "退租",
-      ownerName: "王可信",
-      weeklyStartTime: null,
-      weeklyEndTime: null,
+      days: [3, 4, 6],
+      calendarId: "bryan30740@gmail.com",
+      calendarLabel: "國桐",
+      ownerName: "曾國桐",
+      weeklyStartTime: "13:00",
+      weeklyEndTime: "21:00",
       sortOrder: 0,
-      createdAt: LOCKED_EPOCH,
-    },
-    {
-      id: 300018,
-      templateId: 1,
-      days: [2, 3, 4, 5, 6],
-      calendarId: "mry88312@gmail.com",
-      calendarLabel: "自己",
-      ownerName: "王可信",
-      weeklyStartTime: null,
-      weeklyEndTime: null,
-      sortOrder: 1,
-      createdAt: LOCKED_EPOCH,
-    },
-    {
-      id: 300019,
-      templateId: 1,
-      days: [2, 3, 4, 5, 6],
-      calendarId:
-        "c7235d7c05656408d8c49f0cb14d781f36ea6c6a66b2f048c686de4e20311252@group.calendar.google.com",
-      calendarLabel: "會議",
-      ownerName: "王可信",
-      weeklyStartTime: null,
-      weeklyEndTime: null,
-      sortOrder: 2,
-      createdAt: LOCKED_EPOCH,
-    },
-    {
-      id: 300020,
-      templateId: 1,
-      days: [2, 3, 4, 5, 6],
-      calendarId:
-        "92b45c73a99f09591c8ef87afda56b86286e2395f5a9ce44f8256562d5f4bbab@group.calendar.google.com",
-      calendarLabel: "已預約",
-      ownerName: "王可信",
-      weeklyStartTime: null,
-      weeklyEndTime: null,
-      sortOrder: 3,
       createdAt: LOCKED_EPOCH,
     },
   ],
