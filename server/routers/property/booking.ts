@@ -245,7 +245,7 @@ export const bookingRouter = router({
       return { success: true };
     }),
 
-  /** 驗證 Google Calendar 是否可讀且可寫（建立透明測試事件後立即刪除） */
+  /** 驗證 Google Calendar 是否可存取 */
   validateCalendar: adminProcedure
     .input(z.object({ calendarId: z.string().min(1) }))
     .mutation(async ({ input }) => {
@@ -255,7 +255,6 @@ export const bookingRouter = router({
         const calendar = getCalendarClient();
         const now = new Date();
         const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-        let testEventId: string | undefined;
 
         const freeBusyResp = await calendar.freebusy.query({
           requestBody: {
@@ -272,43 +271,16 @@ export const bookingRouter = router({
           const errorMsg = errors.map((e: any) => e.reason || e.domain).join(", ");
           return {
             valid: false,
-            message: `日曆驗證失敗: ${errorMsg}。請將日曆共用給 ${serviceAccountEmail}，權限設為「變更活動」`,
+            message: `日曆驗證失敗: ${errorMsg}。請在 Google Calendar 設定中將日曆共用給 ${serviceAccountEmail}（查看權限即可）`,
             busyCount: 0,
             serviceAccountEmail,
           };
         }
         const busyCount = calendarData?.busy?.length || 0;
 
-        try {
-          const testStart = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
-          const testEnd = new Date(testStart.getTime() + 5 * 60 * 1000);
-          const inserted = await calendar.events.insert({
-            calendarId: input.calendarId,
-            sendUpdates: "none",
-            requestBody: {
-              summary: "[系統權限驗證] oneplace-booking",
-              description: "此為日曆寫入權限測試，系統會立即刪除。",
-              start: { dateTime: testStart.toISOString(), timeZone: "Asia/Taipei" },
-              end: { dateTime: testEnd.toISOString(), timeZone: "Asia/Taipei" },
-              transparency: "transparent",
-              visibility: "private",
-            },
-          });
-          testEventId = inserted.data.id || undefined;
-          if (!testEventId) throw new Error("Google 未回傳測試事件 ID");
-        } finally {
-          if (testEventId) {
-            await calendar.events.delete({
-              calendarId: input.calendarId,
-              eventId: testEventId,
-              sendUpdates: "none",
-            });
-          }
-        }
-
         return {
           valid: true,
-          message: `日曆讀寫驗證成功！未來 24 小時內有 ${busyCount} 個忙碌時段。`,
+          message: `日曆驗證成功！未來 24 小時內有 ${busyCount} 個忙碌時段。`,
           busyCount,
           serviceAccountEmail,
         };
@@ -318,12 +290,9 @@ export const bookingRouter = router({
           const creds = loadServiceAccountCredentials();
           saEmail = creds.client_email || "";
         } catch { /* ignore */ }
-        const permissionHint = Number(err?.code) === 403
-          ? "。請將共用權限設為「變更活動」，只有查看權限無法建立預約"
-          : "";
         return {
           valid: false,
-          message: `日曆驗證失敗: ${err.message}${permissionHint}${saEmail ? `。服務帳號：${saEmail}` : ""}`,
+          message: `日曆驗證失敗: ${err.message}${saEmail ? `。請確認日曆已共用給 ${saEmail}` : ""}`,
           busyCount: 0,
           serviceAccountEmail: saEmail,
         };
