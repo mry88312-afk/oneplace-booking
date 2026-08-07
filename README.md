@@ -4,7 +4,7 @@
 
 ## 拆分原因
 
-- 主系統部署在 MANUS 上不穩，公開預約頁面 (`/book/:projectId`) 對租客的可用性受影響
+- 舊系統不穩時，公開預約頁面 (`/book/:projectId`) 對租客的可用性會受影響
 - 把租客直接面對的入口拆出，獨立部署在 Zeabur，減少對主系統穩定性的依賴
 - 主系統繼續負責：LINE bot、客服 CRM、模板管理（BookingAdmin）、預約清單後台
 
@@ -12,7 +12,7 @@
 
 ```
 ┌──────────────────────┐         ┌──────────────────────┐
-│  主系統 (MANUS)       │  ◀──────│  Zeabur (本 repo)    │
+│  fieldops LINE hub    │  ◀──────│  Zeabur (本 repo)    │
 │                      │ webhook │                      │
 │  - LINE bot           │ ←──────│  - /book/:projectId   │
 │  - 客服 CRM           │ 發卡片  │  - 8 個 tRPC public   │
@@ -44,7 +44,7 @@
 
 ## 主系統需提供的 webhook 端點
 
-主系統在 `oneplace-service/server/_core/index.ts` 新增了：
+fieldops LINE hub 提供：
 
 ```
 POST /api/booking/notify-line
@@ -81,7 +81,9 @@ npm run dev
 | `DATABASE_URL` | TiDB Cloud 連線字串（記得帶 `?ssl=...`）|
 | `RAGIC_API_KEY` | 從主系統複製 |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Google Service Account 的 JSON 字串 |
-| `MAIN_SYSTEM_WEBHOOK_URL` | `https://fieldops.zeabur.app/api/booking/notify-line` |
+| `LINE_HUB_NOTIFY_URL` | `https://fieldops.zeabur.app/api/booking/notify-line`（省略時使用此預設值） |
+| `LINE_HUB_RELAY_URL` | `https://fieldops.zeabur.app/api/line/relay`（省略時使用此預設值） |
+| `LINE_HUB_INBOX_URL` | `https://fieldops.zeabur.app/inbox`（省略時使用此預設值） |
 | `BOOKING_WEBHOOK_SECRET` | 隨機字串（兩邊都要一樣）|
 | `PORT` | `3000`（Zeabur 預設）|
 | `NODE_ENV` | `production` |
@@ -96,7 +98,7 @@ Zeabur Console → New Service → Deploy from GitHub →
 
 到 LINE Developer Console → LIFF →
 編輯該 LIFF App 的 Endpoint URL，
-從 `https://fieldopsdash-jmqd8ox8.manus.space/book/...` 改成
+從舊公開預約網址改成
 `https://your-app.zeabur.app/book/...`
 
 **LIFF ID 不變**，所以資料庫的 `bookingTemplates.liffId` 不需要動。

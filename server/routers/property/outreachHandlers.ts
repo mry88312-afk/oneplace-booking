@@ -4,7 +4,7 @@
  * 大腦（Supabase）每日用 pg_cron 算出 outreach.schedule、並用 pg_net 把
  * 「已確認且到期」的 schedule_ids POST 到 /api/outreach/run。本檔負責：
  *   1) runOutreach()：發送前再用本地 booking_records 即時防重（stale-value race），
- *      渲染卡片變數、經 MANUS webhook 發送（失敗 fallback 直發 LINE）、回寫 status。
+ *      渲染卡片變數、經 fieldops LINE hub 發送、回寫 status。
  *   2) tRPC adminProcedure：後台看板（列出/編輯/立即送）與規則編輯器、設定。
  *
  * 所有 Supabase 讀寫都在後端（SUPABASE_DB_URL），瀏覽器只打本服務 tRPC。

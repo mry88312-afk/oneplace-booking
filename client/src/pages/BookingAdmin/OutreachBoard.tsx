@@ -31,7 +31,7 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 const TEMPLATE_VARS = ["{{tenant_name}}", "{{property_name}}", "{{room}}", "{{contract_end_date}}", "{{days_until_expiry}}"];
 
-// 投遞 API 串接說明（給 Ragic / MANUS 等外部系統；放在 篩選/設定 分頁可複製）
+// 投遞 API 串接說明（給 Ragic 等外部系統；放在 篩選/設定 分頁可複製）
 const ENQUEUE_PROMPT = `【一方生活｜統一發訊中樞——投遞 API 串接說明】
 
 任何系統要發訊息給室友（純文字或圖文卡片），請改打這支 API：訊息會進排程、看板可控管（可跳過/取消）、時間到自動發送。
@@ -816,7 +816,7 @@ function SettingsTab() {
         <CardContent className="py-4 space-y-3">
           <Label className="text-sm font-semibold">💬 入住卡互動回饋</Label>
           <p className="text-xs text-muted-foreground">
-            入住卡兩顆按鈕（住得很舒服 😊／有點小狀況，請小幫手協助 🛠️）會開啟連結到本系統，全程不經 MANUS。「請小幫手協助」會顯示下方問卷，送出後寫入 Ragic 回饋單並通知下列同事。
+            入住卡兩顆按鈕（住得很舒服 😊／有點小狀況，請小幫手協助 🛠️）會開啟連結到本系統，不經 LINE webhook。「請小幫手協助」會顯示下方問卷，送出後寫入 Ragic 回饋單並通知下列同事。
           </p>
           <div>
             <Label className="text-xs">通知對象 LINE UID（逗號分隔，可多人）</Label>
@@ -844,7 +844,7 @@ function SettingsTab() {
         </CardContent>
       </Card>
       <PromptCard
-        title="投遞 API 串接說明（給 Ragic / MANUS 用）"
+        title="投遞 API 串接說明（給 Ragic 用）"
         desc="其他系統要發卡片給室友時，照這份說明打我們的投遞 API——訊息進排程、看板可控管、時間到自動發送。複製整段給串接的人即可。"
         text={ENQUEUE_PROMPT}
       />

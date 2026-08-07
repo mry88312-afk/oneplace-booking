@@ -1,6 +1,6 @@
 /**
  * LINE 圖文選單 postback 查詢 → 用 replyToken 免費回覆（messaging hub）。
- * MANUS 轉發 postback 事件（data 以 mh: 開頭）+ replyToken 到 /api/line/inbound。
+ * fieldops 轉發 postback 事件（data 以 mh: 開頭）+ replyToken 到 /api/line/inbound。
  * 這裡用 line_uid 認租客 → 依 data 路由查詢 → 組 Flex 卡片 → reply。
  * 資料：合約/繳租帳號/報修 走 Supabase；繳租紀錄走 Ragic form 14（即時，by 虛擬帳號）。
  */

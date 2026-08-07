@@ -3,8 +3,8 @@
  *
  * 與主系統的差異：
  * 1. 移除 tenantUserId 反查（不需要 users 表）
- * 2. LINE Flex Message 改成呼叫主系統 webhook (/api/booking/notify-line)
- *    主系統收到後會用 pushMessage 發給租客 + 記錄 system message
+ * 2. LINE Flex Message 改成呼叫 fieldops LINE hub webhook
+ *    LINE hub 會發給租客並記錄客服系統訊息
  */
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../../db";
@@ -14,33 +14,18 @@ import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap, resolveTemplateBu
 import { sbQuery } from "../../db/supabaseClient";
 
 /**
- * P102：所有對外 LINE 訊息一律經新站台（fieldops.zeabur.app）代發，禁止直打 LINE API。
- * MANUS 已退役——env 若還殘留 manus.space 的網址一律忽略，改用站台預設值。
+ * P102：所有對外 LINE 訊息一律經 fieldops LINE hub 代發，禁止直打 LINE API。
  */
 const HUB_ORIGIN = "https://fieldops.zeabur.app";
-// TODO: 與站台 /api/line/relay 的 hardcode 同步；兩邊 env 都設好 BOOKING_WEBHOOK_SECRET 後移除
-const DEFAULT_WEBHOOK_SECRET = "ed291f55f85dd711d0d8ff6be096cb951ebe36a10efad71847dc5f00c19b0250";
-
-/** env 網址殘留 manus.space 時視同未設定（舊站已死，打過去只會 timeout）。 */
-function envUrl(name: string): string | undefined {
-  const v = process.env[name];
-  return v && !v.includes("manus.space") ? v : undefined;
-}
 
 /** notify-line webhook 網址（預約確認卡）。 */
 export function resolveNotifyUrl(): string {
-  return envUrl("MAIN_SYSTEM_WEBHOOK_URL") || `${HUB_ORIGIN}/api/booking/notify-line`;
+  return process.env.LINE_HUB_NOTIFY_URL || `${HUB_ORIGIN}/api/booking/notify-line`;
 }
 
 /** 通用代發 relay 網址。 */
 function resolveRelayUrl(): string {
-  const explicit = envUrl("MANUS_LINE_RELAY_URL");
-  if (explicit) return explicit;
-  const notify = envUrl("MAIN_SYSTEM_WEBHOOK_URL");
-  if (notify) {
-    try { return new URL("/api/line/relay", notify).href; } catch {}
-  }
-  return `${HUB_ORIGIN}/api/line/relay`;
+  return process.env.LINE_HUB_RELAY_URL || `${HUB_ORIGIN}/api/line/relay`;
 }
 
 /**
@@ -51,7 +36,10 @@ export async function postToHub(
   url: string,
   body: any,
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
-  const secret = process.env.BOOKING_WEBHOOK_SECRET || DEFAULT_WEBHOOK_SECRET;
+  const secret = process.env.BOOKING_WEBHOOK_SECRET;
+  if (!secret) {
+    return { ok: false, error: "BOOKING_WEBHOOK_SECRET not set" };
+  }
   const delaysMs = [0, 3000, 10000];
   let lastErr = "";
   for (const delay of delaysMs) {
@@ -557,9 +545,9 @@ export async function handleConfirmBooking(
         input.uid &&
         input.uid !== "unknown"
       ) {
-        // 注意：對話網址指向主系統的客服介面
+        // 對話網址指向 fieldops 的客服介面
         const inboxBase =
-          process.env.MAIN_SYSTEM_INBOX_URL ||
+          process.env.LINE_HUB_INBOX_URL ||
           "https://fieldops.zeabur.app/inbox";
         ragicData[field.ragicFieldId] = `${inboxBase}?uid=${input.uid}`;
         continue;
