@@ -289,6 +289,46 @@ export async function lookupContractInfo(phone: string, tenantName: string): Pro
 }
 
 /**
+ * Resolve the room from an exact historical contract number.
+ *
+ * This fallback intentionally does not filter by contract status: the booking
+ * flow must remain available when the tenant summary still points to a latest
+ * contract but the active-contract mirror has already been cleared. Exact
+ * contract-number matching avoids guessing by name or selecting an unrelated
+ * older room.
+ */
+export async function lookupContractResidenceByNumber(contractNumber: string): Promise<{
+  roomNumber: string;
+  propertyName: string;
+  contractId: string;
+  contractStatus: string;
+} | null> {
+  if (!contractNumber) return null;
+
+  const data = await ragicGet("service-department/4", {
+    where: `1007360,eq,${contractNumber}`,
+    limit: "5",
+    naming: "EID",
+  });
+  const records = (Object.values(data) as any[]).filter(
+    (record: any) => record?.["1007360"] === contractNumber,
+  );
+  if (records.length === 0) return null;
+
+  const target = records[0];
+  const rooms = target["1007552"];
+  const roomNumber = Array.isArray(rooms) ? rooms.join(", ") : String(rooms || "");
+  if (!roomNumber) return null;
+
+  return {
+    roomNumber,
+    propertyName: String(target["1015395"] || ""),
+    contractId: String(target["1007360"] || contractNumber),
+    contractStatus: String(target["1007778"] || ""),
+  };
+}
+
+/**
  * 從 go-back/22 合約管理表查詢合約的 Ragic 記錄 ID
  * 流程：for-system-use/2 的欄位 1019285（最新合約編號）→ 拿到合約編號
  *       → 去 go-back/22 用欄位 1007360 查該合約編號 → 回傳 _ragicId

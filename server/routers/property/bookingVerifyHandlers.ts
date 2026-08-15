@@ -10,11 +10,36 @@ import {
   ragicGet,
   ragicPut,
   extractTenantInfo,
+  lookupContractResidenceByNumber,
   lookupLatestContractRecordId,
   resolveTemplateBundle,
   RAGIC_API_KEY_VALUE,
 } from "./bookingHelpers";
 import { resolveResidences, getRenewalWindow, type Residence } from "../../db/supabaseClient";
+
+async function resolveBookingResidences(
+  info: ReturnType<typeof extractTenantInfo>,
+  opts: { lineUid?: string; phone?: string },
+): Promise<Residence[]> {
+  const activeResidences = await resolveResidences(opts);
+  if (activeResidences.length > 0 || info.roomNumber) return activeResidences;
+
+  const historical = await lookupContractResidenceByNumber(info.contractId);
+  if (!historical) return activeResidences;
+
+  console.log("[Booking-Verify] active residence missing; using exact latest-contract room fallback:", {
+    contractNo: historical.contractId,
+    contractStatus: historical.contractStatus,
+    roomNumber: historical.roomNumber,
+  });
+  return [{
+    contractNo: historical.contractId,
+    room: historical.roomNumber,
+    property: historical.propertyName || info.propertyName || null,
+    propertyId: info.propertyId || null,
+    tenantCount: 1,
+  }];
+}
 
 /** 組 verify 回應。
  *  P96：房間改用 residences（Supabase 反查 legacy_snapshot 1015116，含主客2/共同承租的正確合約）；
@@ -133,7 +158,7 @@ export async function handleVerifyTenantUid(input: {
   });
 
   // P96：用 line_uid（換電話）反查該人所有有效合約的房間（含主客2）；info.phone 當備援 key。
-  const residences = await resolveResidences({ lineUid: input.uid, phone: info.phone });
+  const residences = await resolveBookingResidences(info, { lineUid: input.uid, phone: info.phone });
   console.log("[Booking-Verify] residences:", residences.length, residences.map((r) => `${r.contractNo}:${r.room}`).join(" | "));
   return await finalizeVerify(template, info, residences);
 }
@@ -204,7 +229,7 @@ export async function handleVerifyByPhone(input: {
   }
 
   // P96：用租客輸入的電話（正規化過）反查所有有效合約的房間（含主客2）；info.phone 當備援。
-  const residences = await resolveResidences({ phone: normalizedPhone || info.phone, lineUid: input.uid });
+  const residences = await resolveBookingResidences(info, { phone: normalizedPhone || info.phone, lineUid: input.uid });
   console.log("[Booking-Phone] residences:", residences.length, residences.map((r) => `${r.contractNo}:${r.room}`).join(" | "));
   return await finalizeVerify(template, info, residences);
 }
