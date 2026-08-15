@@ -161,6 +161,13 @@ interface ResidenceRow {
   tenant_count: number | string | null;
 }
 
+export interface CheckoutResidenceCandidateRow extends ResidenceRow {
+  start_date: string | Date | null;
+  deleted_at: string | Date | null;
+  move_out_date: string | Date | null;
+  legacy_state: string | null;
+}
+
 const RESIDENCE_SELECT = `select tc.contract_no,
               coalesce(
                 nullif(array_to_string(array(select jsonb_array_elements_text(
@@ -175,6 +182,12 @@ const RESIDENCE_SELECT = `select tc.contract_no,
 const ACTIVE_RESIDENCE_FILTER = `tc.deleted_at is null and tc.move_out_date is null
           and (tc.legacy_snapshot->>'1007778') = '存在'`;
 
+const CHECKOUT_RESIDENCE_SELECT = `${RESIDENCE_SELECT},
+              tc.start_date, tc.deleted_at, tc.move_out_date,
+              tc.legacy_snapshot->>'1007778' as legacy_state`;
+
+const CHECKOUT_RESIDENCE_FILTER = `tc.deleted_at is null`;
+
 function mapResidenceRows(rows: ResidenceRow[]): Residence[] {
   return rows
     .map((row) => ({
@@ -185,6 +198,32 @@ function mapResidenceRows(rows: ResidenceRow[]): Residence[] {
       tenantCount: Number(row.tenant_count) || 1,
     }))
     .filter((residence) => residence.room);
+}
+
+function residenceDateScore(value: string | Date | null): number {
+  if (!value) return 0;
+  const score = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(score) ? score : 0;
+}
+
+/**
+ * P105：退租可使用本人最新一份「尚未真正退租」的合約。
+ * Ragic 的「取消」也可能只是合約自然到期，不能把它當成已退租；真正阻擋條件是
+ * deleted_at / move_out_date。刻意不限制到期多久，並只取最新合約避免回到舊房間。
+ */
+export function selectLatestCheckoutResidence(
+  rows: CheckoutResidenceCandidateRow[],
+): Residence[] {
+  const latest = rows
+    .filter((row) => row.contract_no && !row.deleted_at)
+    .sort((left, right) => {
+      const byStart = residenceDateScore(right.start_date) - residenceDateScore(left.start_date);
+      if (byStart !== 0) return byStart;
+      return String(right.contract_no).localeCompare(String(left.contract_no));
+    })[0];
+
+  if (!latest || latest.move_out_date) return [];
+  return mapResidenceRows([latest]);
 }
 
 function buildPhoneCandidates(phone: string): string[] {
@@ -199,8 +238,16 @@ function buildPhoneCandidates(phone: string): string[] {
   return [...candidates].filter(Boolean);
 }
 
-/** 用 line_uid（先換電話）或直接用電話，反查所有有效合約的房間。抓不到/出錯一律回 []（呼叫端優雅降級回舊邏輯）。 */
-export async function resolveResidences(opts: { lineUid?: string; phone?: string }): Promise<Residence[]> {
+/**
+ * 用 line_uid（先換電話）或直接用電話反查合約房間。
+ * 預設只回有效合約；退租可在有效合約全數查空後，啟用最新未退租合約備援。
+ * 抓不到/出錯一律回 []（呼叫端優雅降級回舊邏輯）。
+ */
+export async function resolveResidences(opts: {
+  lineUid?: string;
+  phone?: string;
+  includeExpiredCheckout?: boolean;
+}): Promise<Residence[]> {
   if (!isSupabaseConfigured()) return [];
   try {
     let phone = (opts.phone || "").trim();
@@ -242,31 +289,92 @@ export async function resolveResidences(opts: { lineUid?: string; phone?: string
       if (linkedResidences.length > 0) return linkedResidences;
     }
 
-    if (!phone) return [];
-
     // 共同承租／主客2可能沒有 parties 關聯；先用精確 JSONB containment，再保留舊的正規化電話備援。
-    const phoneCandidates = buildPhoneCandidates(phone);
-    const exactSnapshotRows = await sbQuery<ResidenceRow>(
-      `${RESIDENCE_SELECT}
-         from contract.tenant_contracts tc
+    const phoneCandidates = phone ? buildPhoneCandidates(phone) : [];
+    if (phone) {
+      const exactSnapshotRows = await sbQuery<ResidenceRow>(
+        `${RESIDENCE_SELECT}
+           from contract.tenant_contracts tc
+           left join property.units u on u.id = tc.unit_id
+           left join property.properties p on p.id = tc.property_id
+          where ${ACTIVE_RESIDENCE_FILTER}
+            and (case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
+                      then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) ?| $1::text[]
+          order by tc.start_date desc nulls last
+          limit 10`,
+        [phoneCandidates],
+      );
+      const exactSnapshotResidences = mapResidenceRows(exactSnapshotRows);
+      if (exactSnapshotResidences.length > 0) return exactSnapshotResidences;
+
+      const normalizedSnapshotRows = await sbQuery<ResidenceRow>(
+        `${RESIDENCE_SELECT}
+           from contract.tenant_contracts tc
+           left join property.units u on u.id = tc.unit_id
+           left join property.properties p on p.id = tc.property_id
+          where ${ACTIVE_RESIDENCE_FILTER}
+            and exists (
+              select 1 from jsonb_array_elements_text(
+                case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
+                     then tc.legacy_snapshot->'1015116' else '[]'::jsonb end
+              ) ph where regexp_replace(ph,'[^0-9]','','g') = regexp_replace($1,'[^0-9]','','g')
+            )
+          order by tc.start_date desc nulls last
+          limit 10`,
+        [phone],
+      );
+      const normalizedSnapshotResidences = mapResidenceRows(normalizedSnapshotRows);
+      if (normalizedSnapshotResidences.length > 0) return normalizedSnapshotResidences;
+    }
+
+    if (!opts.includeExpiredCheckout) return [];
+
+    // P105：只有退租、且所有有效合約路徑都查空後，才查最新未退租合約。
+    // 主租客關係表與共同承租電話快照一起比較，確保新約優先，不會先命中舊角色。
+    const checkoutCandidates: CheckoutResidenceCandidateRow[] = [];
+    if (tenantId) {
+      const linkedCheckoutRows = await sbQuery<CheckoutResidenceCandidateRow>(
+        `${CHECKOUT_RESIDENCE_SELECT}
+         from contract.tenant_contract_parties tcp
+         join contract.tenant_contracts tc on tc.id = tcp.tenant_contract_id
          left join property.units u on u.id = tc.unit_id
          left join property.properties p on p.id = tc.property_id
-        where ${ACTIVE_RESIDENCE_FILTER}
-          and (case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
-                    then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) ?| $1::text[]
+        where tcp.tenant_id=$1 and ${CHECKOUT_RESIDENCE_FILTER}
         order by tc.start_date desc nulls last
         limit 10`,
-      [phoneCandidates],
-    );
-    const exactSnapshotResidences = mapResidenceRows(exactSnapshotRows);
-    if (exactSnapshotResidences.length > 0) return exactSnapshotResidences;
+        [tenantId],
+      );
+      checkoutCandidates.push(...linkedCheckoutRows);
+    }
 
-    const normalizedSnapshotRows = await sbQuery<ResidenceRow>(
-      `${RESIDENCE_SELECT}
+    if (phoneCandidates.length > 0) {
+      const exactCheckoutRows = await sbQuery<CheckoutResidenceCandidateRow>(
+        `${CHECKOUT_RESIDENCE_SELECT}
+           from contract.tenant_contracts tc
+           left join property.units u on u.id = tc.unit_id
+           left join property.properties p on p.id = tc.property_id
+          where ${CHECKOUT_RESIDENCE_FILTER}
+            and (case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
+                      then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) ?| $1::text[]
+          order by tc.start_date desc nulls last
+          limit 10`,
+        [phoneCandidates],
+      );
+      checkoutCandidates.push(...exactCheckoutRows);
+    }
+
+    if (checkoutCandidates.length > 0) {
+      return selectLatestCheckoutResidence(checkoutCandidates);
+    }
+
+    if (!phone) return [];
+
+    const normalizedCheckoutRows = await sbQuery<CheckoutResidenceCandidateRow>(
+      `${CHECKOUT_RESIDENCE_SELECT}
          from contract.tenant_contracts tc
          left join property.units u on u.id = tc.unit_id
          left join property.properties p on p.id = tc.property_id
-        where ${ACTIVE_RESIDENCE_FILTER}
+        where ${CHECKOUT_RESIDENCE_FILTER}
           and exists (
             select 1 from jsonb_array_elements_text(
               case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
@@ -277,7 +385,7 @@ export async function resolveResidences(opts: { lineUid?: string; phone?: string
         limit 10`,
       [phone],
     );
-    return mapResidenceRows(normalizedSnapshotRows);
+    return selectLatestCheckoutResidence(normalizedCheckoutRows);
   } catch (e: any) {
     console.error("[resolveResidences] Supabase 查詢失敗:", e?.message);
     return [];

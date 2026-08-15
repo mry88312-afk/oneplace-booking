@@ -20,12 +20,13 @@ import { resolveResidences, getRenewalWindow, type Residence } from "../../db/su
 async function resolveBookingResidences(
   info: ReturnType<typeof extractTenantInfo>,
   opts: { lineUid?: string; phone?: string },
+  includeExpiredCheckout: boolean,
 ): Promise<Residence[]> {
-  const activeResidences = await resolveResidences(opts);
-  if (activeResidences.length > 0 || info.roomNumber) return activeResidences;
+  const resolvedResidences = await resolveResidences({ ...opts, includeExpiredCheckout });
+  if (resolvedResidences.length > 0 || info.roomNumber) return resolvedResidences;
 
   const historical = await lookupContractResidenceByNumber(info.contractId);
-  if (!historical) return activeResidences;
+  if (!historical) return resolvedResidences;
 
   console.log("[Booking-Verify] active residence missing; using exact latest-contract room fallback:", {
     contractNo: historical.contractId,
@@ -158,7 +159,11 @@ export async function handleVerifyTenantUid(input: {
   });
 
   // P96：用 line_uid（換電話）反查該人所有有效合約的房間（含主客2）；info.phone 當備援 key。
-  const residences = await resolveBookingResidences(info, { lineUid: input.uid, phone: info.phone });
+  const residences = await resolveBookingResidences(
+    info,
+    { lineUid: input.uid, phone: info.phone },
+    template.projectId === "checkout",
+  );
   console.log("[Booking-Verify] residences:", residences.length, residences.map((r) => `${r.contractNo}:${r.room}`).join(" | "));
   return await finalizeVerify(template, info, residences);
 }
@@ -229,7 +234,11 @@ export async function handleVerifyByPhone(input: {
   }
 
   // P96：用租客輸入的電話（正規化過）反查所有有效合約的房間（含主客2）；info.phone 當備援。
-  const residences = await resolveBookingResidences(info, { phone: normalizedPhone || info.phone, lineUid: input.uid });
+  const residences = await resolveBookingResidences(
+    info,
+    { phone: normalizedPhone || info.phone, lineUid: input.uid },
+    template.projectId === "checkout",
+  );
   console.log("[Booking-Phone] residences:", residences.length, residences.map((r) => `${r.contractNo}:${r.room}`).join(" | "));
   return await finalizeVerify(template, info, residences);
 }
