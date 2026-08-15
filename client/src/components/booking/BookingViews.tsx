@@ -663,8 +663,16 @@ export function FormView({
               })()}
               {field.fieldType === "file" && (
                 <div className="mt-1.5">
-                  <input type="file" accept="image/*,application/pdf" ref={(el) => { fileInputRefs.current[field.label] = el; }} className="hidden"
-                    onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFileUpload(field.label, file); }} />
+                  <input type="file"
+                    accept={template.projectId === "checkout"
+                      ? "image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                      : "image/*,application/pdf"}
+                    ref={(el) => { fileInputRefs.current[field.label] = el; }} className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.currentTarget.value = "";
+                      if (file) handleFileUpload(field.label, file);
+                    }} />
                   {fileUploads[field.label] ? (
                     <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
                       <FileText className="h-4 w-4 text-green-600 shrink-0" />

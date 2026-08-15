@@ -26,6 +26,39 @@ interface Residence {
   renewalWindow?: any;
 }
 
+const CHECKOUT_IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  heic: "image/heic",
+  heif: "image/heif",
+};
+
+async function resolveCheckoutImageMime(file: File): Promise<string | null> {
+  const normalizedType = file.type.toLowerCase();
+  const extension = file.name.split(".").pop()?.toLowerCase() || "";
+  const candidateMime = Object.values(CHECKOUT_IMAGE_MIME_BY_EXTENSION).includes(normalizedType)
+    ? normalizedType
+    : CHECKOUT_IMAGE_MIME_BY_EXTENSION[extension] || null;
+  if (!candidateMime) return null;
+
+  try {
+    const bytes = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+    if (bytes.length < 12) return null;
+    const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end));
+    const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const isPng = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+      .every((value, index) => bytes[index] === value);
+    const isWebp = ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP";
+    const isHeif = ascii(4, 8) === "ftyp"
+      && /heic|heix|hevc|hevx|heim|heis|mif1|msf1/.test(ascii(8, Math.min(bytes.length, 32)));
+    return isJpeg || isPng || isWebp || isHeif ? candidateMime : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function BookingPublic() {
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId || "";
@@ -511,13 +544,23 @@ export default function BookingPublic() {
   };
 
   const handleFileUpload = async (fieldLabel: string, file: File) => {
+    const checkoutImageMime = projectId === "checkout" ? await resolveCheckoutImageMime(file) : null;
+    // P104：退租選檔當下即拒絕 PDF／文件，不等送出預約才攔截。
+    if (projectId === "checkout" && !checkoutImageMime) {
+      toast.error("只能上傳照片（JPG、PNG、WebP 或 HEIC）");
+      return;
+    }
+
     setIsUploading(fieldLabel);
     try {
+      const sourceFile = checkoutImageMime && file.type.toLowerCase() !== checkoutImageMime
+        ? new File([file], file.name, { type: checkoutImageMime })
+        : file;
       // 圖片 > 500KB 先壓縮，避免 base64 後撐爆 tRPC body limit
-      let blob: Blob = file;
-      if (file.type.startsWith("image/") && file.size > 500 * 1024) {
+      let blob: Blob = sourceFile;
+      if (sourceFile.type.startsWith("image/") && sourceFile.size > 500 * 1024) {
         const { compressImage } = await import("@/lib/uploadUtils");
-        blob = await compressImage(file);
+        blob = await compressImage(sourceFile);
       }
       // 編成 base64 data URL，存進 state，預約確認時一起送給 server
       // server 收到後判斷是 data: 開頭就直接解碼上傳 Ragic（不繞 S3 / 不繞 MANUS）
@@ -527,7 +570,7 @@ export default function BookingPublic() {
         reader.onerror = () => reject(new Error("讀檔失敗"));
         reader.readAsDataURL(blob);
       });
-      setFileUploads((prev) => ({ ...prev, [fieldLabel]: { name: file.name, url: dataUrl } }));
+      setFileUploads((prev) => ({ ...prev, [fieldLabel]: { name: sourceFile.name, url: dataUrl } }));
       setFormAnswers((prev) => ({ ...prev, [fieldLabel]: dataUrl }));
       toast.success("檔案已就緒");
     } catch (err: any) {
