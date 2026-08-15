@@ -21,6 +21,54 @@ const HUB_ORIGIN = "https://fieldops.zeabur.app";
 // TODO: 與站台 /api/line/relay 的 hardcode 同步；兩邊 env 都設好 BOOKING_WEBHOOK_SECRET 後移除
 const DEFAULT_WEBHOOK_SECRET = "ed291f55f85dd711d0d8ff6be096cb951ebe36a10efad71847dc5f00c19b0250";
 
+const CHECKOUT_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
+
+function parseFileUrls(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  if (value.startsWith("data:")) return [value];
+  return value.split(",").map((url) => url.trim()).filter(Boolean);
+}
+
+/** P104：不能只相信瀏覽器的 accept/MIME；辨識實際檔頭，避免 PDF 改副檔名繞過。 */
+export function isCheckoutImageDataUrl(value: string): boolean {
+  const match = /^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(value);
+  if (!match || !CHECKOUT_IMAGE_MIME_TYPES.has(match[1].toLowerCase())) return false;
+
+  const bytes = Buffer.from(match[2], "base64");
+  if (bytes.length < 12) return false;
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isPng = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isWebp = bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  const brandBlock = bytes.subarray(8, Math.min(bytes.length, 32)).toString("ascii");
+  const isHeif = bytes.subarray(4, 8).toString("ascii") === "ftyp"
+    && /heic|heix|hevc|hevx|heim|heis|mif1|msf1/.test(brandBlock);
+  return isJpeg || isPng || isWebp || isHeif;
+}
+
+function assertCheckoutImageAnswers(
+  projectId: string,
+  fields: Array<{ fieldType: string; label: string }>,
+  answers?: Record<string, any>,
+): void {
+  if (projectId !== "checkout" || !answers) return;
+  for (const field of fields) {
+    if (field.fieldType !== "file" || !answers[field.label]) continue;
+    const urls = parseFileUrls(answers[field.label]);
+    if (urls.length === 0 || urls.some((url) => !isCheckoutImageDataUrl(url))) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "退租資料只能上傳照片（JPG、PNG、WebP 或 HEIC）",
+      });
+    }
+  }
+}
+
 /** env 網址殘留 manus.space 時視同未設定（舊站已死，打過去只會 timeout）。 */
 function envUrl(name: string): string | undefined {
   const v = process.env[name];
@@ -474,6 +522,9 @@ export async function handleConfirmBooking(
     });
   }
 
+  // P104：在任何 Ragic／TiDB 寫入前先做伺服器端防繞過檢查。
+  assertCheckoutImageAnswers(template.projectId, bundle.fields, input.formAnswers);
+
   // 線上續約 合約期間：算出 開始日 / 到期日 / 是否展延，給「寫回 Ragic」與「確認卡」共用。
   // 策略：後端先重抓 Supabase 驗一次（不信前端）；若重抓沒取得（Supabase 當下抓不到/超時），
   //       就用「租客實際填的」開始日+到期日當後備 → 確保只要租客有選日期，卡片一定顯示、Ragic 一定寫。
@@ -588,18 +639,7 @@ export async function handleConfirmBooking(
           value = parts.join(",");
         }
         if (field.fieldType === "file") {
-          let urls: string[];
-          if (typeof value === "string" && value.startsWith("data:")) {
-            // base64 data URL 含逗號（data:xxx;base64,yyy），不可 split
-            urls = [value];
-          } else if (typeof value === "string") {
-            urls = value
-              .split(",")
-              .map((u: string) => u.trim())
-              .filter(Boolean);
-          } else {
-            urls = [value];
-          }
+          const urls = parseFileUrls(value);
           for (const url of urls) {
             fileFieldsToUpload.push({ fieldId: field.ragicFieldId, fileUrl: url });
           }

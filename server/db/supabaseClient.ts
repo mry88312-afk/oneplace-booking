@@ -153,22 +153,15 @@ export interface Residence {
   renewalWindow?: RenewalWindow | null; // 只有 renewal 專案才填（每份合約各自的續約日期視窗）
 }
 
-/** 用 line_uid（先換電話）或直接用電話，反查所有有效合約的房間。抓不到/出錯一律回 []（呼叫端優雅降級回舊邏輯）。 */
-export async function resolveResidences(opts: { lineUid?: string; phone?: string }): Promise<Residence[]> {
-  if (!isSupabaseConfigured()) return [];
-  try {
-    let phone = (opts.phone || "").trim();
-    if (!phone && opts.lineUid) {
-      const rows = await sbQuery<{ p: string }>(
-        `select primary_phone as p from contract.tenants
-          where line_uid=$1 and primary_phone is not null and primary_phone<>'' limit 1`,
-        [opts.lineUid],
-      );
-      phone = rows[0]?.p || "";
-    }
-    if (!phone) return [];
-    const rows = await sbQuery<any>(
-      `select tc.contract_no,
+interface ResidenceRow {
+  contract_no: string | null;
+  room: string | null;
+  property: string | null;
+  property_id: string | null;
+  tenant_count: number | string | null;
+}
+
+const RESIDENCE_SELECT = `select tc.contract_no,
               coalesce(
                 nullif(array_to_string(array(select jsonb_array_elements_text(
                    case when jsonb_typeof(tc.legacy_snapshot->'1007552')='array'
@@ -177,12 +170,103 @@ export async function resolveResidences(opts: { lineUid?: string; phone?: string
               ) as room,
               p.short_name as property, p.id as property_id,
               jsonb_array_length(case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
-                                      then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) as tenant_count
+                                      then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) as tenant_count`;
+
+const ACTIVE_RESIDENCE_FILTER = `tc.deleted_at is null and tc.move_out_date is null
+          and (tc.legacy_snapshot->>'1007778') = '存在'`;
+
+function mapResidenceRows(rows: ResidenceRow[]): Residence[] {
+  return rows
+    .map((row) => ({
+      contractNo: row.contract_no || "",
+      room: row.room || "",
+      property: row.property || null,
+      propertyId: row.property_id || null,
+      tenantCount: Number(row.tenant_count) || 1,
+    }))
+    .filter((residence) => residence.room);
+}
+
+function buildPhoneCandidates(phone: string): string[] {
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/[^0-9]/g, "");
+  const candidates = new Set([trimmed, digits]);
+  if (/^09\d{8}$/.test(digits)) {
+    candidates.add(`${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`);
+    candidates.add(`${digits.slice(0, 4)}-${digits.slice(4)}`);
+    candidates.add(`${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`);
+  }
+  return [...candidates].filter(Boolean);
+}
+
+/** 用 line_uid（先換電話）或直接用電話，反查所有有效合約的房間。抓不到/出錯一律回 []（呼叫端優雅降級回舊邏輯）。 */
+export async function resolveResidences(opts: { lineUid?: string; phone?: string }): Promise<Residence[]> {
+  if (!isSupabaseConfigured()) return [];
+  try {
+    let phone = (opts.phone || "").trim();
+    let tenantId = "";
+    if (opts.lineUid) {
+      const rows = await sbQuery<{ id: string; primary_phone: string | null }>(
+        `select id, primary_phone from contract.tenants where line_uid=$1 limit 1`,
+        [opts.lineUid],
+      );
+      tenantId = rows[0]?.id || "";
+      phone = phone || rows[0]?.primary_phone || "";
+    }
+
+    if (!tenantId) {
+      if (!phone) return [];
+      const phoneCandidates = buildPhoneCandidates(phone);
+      const exactTenant = await sbQuery<{ id: string; primary_phone: string | null }>(
+        `select id, primary_phone from contract.tenants where primary_phone=any($1::text[]) limit 1`,
+        [phoneCandidates],
+      );
+      tenantId = exactTenant[0]?.id || "";
+      phone = exactTenant[0]?.primary_phone || phone;
+    }
+
+    // P104：主租客先走有索引的關係表，避免每次都展開全表 legacy JSONB 而 statement timeout。
+    if (tenantId) {
+      const linkedRows = await sbQuery<ResidenceRow>(
+        `${RESIDENCE_SELECT}
+         from contract.tenant_contract_parties tcp
+         join contract.tenant_contracts tc on tc.id = tcp.tenant_contract_id
+         left join property.units u on u.id = tc.unit_id
+         left join property.properties p on p.id = tc.property_id
+        where tcp.tenant_id=$1 and ${ACTIVE_RESIDENCE_FILTER}
+        order by tc.start_date desc nulls last
+        limit 10`,
+        [tenantId],
+      );
+      const linkedResidences = mapResidenceRows(linkedRows);
+      if (linkedResidences.length > 0) return linkedResidences;
+    }
+
+    if (!phone) return [];
+
+    // 共同承租／主客2可能沒有 parties 關聯；先用精確 JSONB containment，再保留舊的正規化電話備援。
+    const phoneCandidates = buildPhoneCandidates(phone);
+    const exactSnapshotRows = await sbQuery<ResidenceRow>(
+      `${RESIDENCE_SELECT}
          from contract.tenant_contracts tc
          left join property.units u on u.id = tc.unit_id
          left join property.properties p on p.id = tc.property_id
-        where tc.deleted_at is null and tc.move_out_date is null
-          and (tc.legacy_snapshot->>'1007778') = '存在'
+        where ${ACTIVE_RESIDENCE_FILTER}
+          and (case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
+                    then tc.legacy_snapshot->'1015116' else '[]'::jsonb end) ?| $1::text[]
+        order by tc.start_date desc nulls last
+        limit 10`,
+      [phoneCandidates],
+    );
+    const exactSnapshotResidences = mapResidenceRows(exactSnapshotRows);
+    if (exactSnapshotResidences.length > 0) return exactSnapshotResidences;
+
+    const normalizedSnapshotRows = await sbQuery<ResidenceRow>(
+      `${RESIDENCE_SELECT}
+         from contract.tenant_contracts tc
+         left join property.units u on u.id = tc.unit_id
+         left join property.properties p on p.id = tc.property_id
+        where ${ACTIVE_RESIDENCE_FILTER}
           and exists (
             select 1 from jsonb_array_elements_text(
               case when jsonb_typeof(tc.legacy_snapshot->'1015116')='array'
@@ -193,15 +277,7 @@ export async function resolveResidences(opts: { lineUid?: string; phone?: string
         limit 10`,
       [phone],
     );
-    return rows
-      .map((r) => ({
-        contractNo: r.contract_no || "",
-        room: r.room || "",
-        property: r.property || null,
-        propertyId: r.property_id || null,
-        tenantCount: Number(r.tenant_count) || 1,
-      }))
-      .filter((r) => r.room);
+    return mapResidenceRows(normalizedSnapshotRows);
   } catch (e: any) {
     console.error("[resolveResidences] Supabase 查詢失敗:", e?.message);
     return [];
