@@ -11,7 +11,38 @@ import { relayToLine } from "./bookingConfirmHandler";
 const GREEN = "#2e4a36";
 const RAGIC_BASE = "https://ap13.ragic.com/OnePlaceLiving";
 
-type Tenant = { id: string; primary_name: string; primary_phone: string; virtual_account: string | null };
+export type Tenant = { id: string; primary_name: string; primary_phone: string; virtual_account: string | null };
+
+type VirtualAccountRow = { virtual_account: string | null };
+type VirtualAccountQuery = (text: string, params?: any[]) => Promise<VirtualAccountRow[]>;
+
+export async function resolveTenantVirtualAccount(
+  tenant: Tenant,
+  query: VirtualAccountQuery = sbQuery,
+): Promise<string | null> {
+  const tenantAccount = tenant.virtual_account?.trim();
+  if (tenantAccount) return tenantAccount;
+
+  const rows = await query(
+    `select distinct trim(rr.virtual_account::text) as virtual_account
+       from contract.tenant_contract_parties tcp
+       join contract.tenant_contracts tc on tc.id = tcp.tenant_contract_id
+       join finance.rent_receipts rr on rr.latest_contract_no = tc.contract_no
+      where tcp.tenant_id = $1
+        and nullif(btrim(tc.contract_no::text), '') is not null
+        and tc.status = 'active'
+        and tc.deleted_at is null
+        and rr.deleted_at is null
+        and nullif(trim(rr.virtual_account::text), '') is not null`,
+    [tenant.id],
+  );
+  const accounts = [...new Set(
+    rows
+      .map((row) => row.virtual_account?.trim())
+      .filter((account): account is string => Boolean(account)),
+  )];
+  return accounts.length === 1 ? accounts[0] : null;
+}
 
 async function getTenant(uid: string): Promise<Tenant | null> {
   const rows = await sbQuery<Tenant>(
@@ -83,9 +114,9 @@ async function buildContract(t: Tenant) {
   return bubble("📄 我的合約", blocks, "合約查詢");
 }
 
-function buildVA(t: Tenant) {
-  if (!t.virtual_account) return txt(`${t.primary_name} 您好，系統尚未有您的專屬繳租帳號，請聯繫小幫手協助 🙏`);
-  const acct = "822-" + t.virtual_account;
+function buildVA(t: Tenant, virtualAccount: string | null) {
+  if (!virtualAccount) return txt(`${t.primary_name} 您好，已找到您的租客資料，但專屬繳租帳號尚未同步完成，請聯繫小幫手協助 🙏`);
+  const acct = "822-" + virtualAccount;
   return bubble("🏦 繳租帳號", [
     { type: "text", text: "中國信託 復北分行", size: "sm", color: "#666666", align: "center" },
     { type: "text", text: acct, weight: "bold", size: "xl", align: "center", color: GREEN, margin: "sm", adjustMode: "shrink-to-fit" },
@@ -95,11 +126,11 @@ function buildVA(t: Tenant) {
   ], "繳租帳號：" + acct);
 }
 
-async function buildRent(t: Tenant) {
-  if (!t.virtual_account) return txt(`${t.primary_name} 您好，尚未有您的繳租帳號，無法查詢繳費紀錄，請聯繫小幫手 🙏`);
+async function buildRent(t: Tenant, virtualAccount: string | null) {
+  if (!virtualAccount) return txt(`${t.primary_name} 您好，已找到您的租客資料，但專屬繳租帳號尚未同步完成，因此暫時無法查詢繳費紀錄，請聯繫小幫手協助 🙏`);
   const key = process.env.RAGIC_API_KEY;
   if (!key) return txt("繳費系統暫時無法連線，請稍後再試。");
-  const url = `${RAGIC_BASE}/accounting-department/14?api&v=3&naming=EID&where=1022234,eq,${encodeURIComponent(t.virtual_account)}`;
+  const url = `${RAGIC_BASE}/accounting-department/14?api&v=3&naming=EID&where=1022234,eq,${encodeURIComponent(virtualAccount)}`;
   let rows: any[] = [];
   try {
     const resp = await fetch(url, { headers: { Authorization: `Basic ${key}` }, signal: AbortSignal.timeout(12000) });
@@ -303,8 +334,8 @@ export async function handleInboundEvents(
         else {
           matched = t.primary_name || null;
           if (data === "mh:contract") msg = await buildContract(t);
-          else if (data === "mh:va") msg = buildVA(t);
-          else if (data === "mh:rent") msg = await buildRent(t);
+          else if (data === "mh:va") msg = buildVA(t, await resolveTenantVirtualAccount(t));
+          else if (data === "mh:rent") msg = await buildRent(t, await resolveTenantVirtualAccount(t));
           else if (data === "mh:repair") msg = await buildRepair(uid!, t.primary_name);
           else continue;
         }
