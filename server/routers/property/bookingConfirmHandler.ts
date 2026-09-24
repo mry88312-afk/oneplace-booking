@@ -111,8 +111,24 @@ export async function postToHub(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(8000),
       });
-      if (resp.ok) return { ok: true, status: resp.status };
       const text = await resp.text().catch(() => "");
+      if (resp.ok) {
+        // Some deployed relays return HTTP 200 for application errors.
+        // Do not mark a notification delivered from its HTTP status alone.
+        let result: any;
+        try {
+          result = JSON.parse(text);
+        } catch {
+          return { ok: false, status: resp.status, error: "Hub returned a non-JSON response" };
+        }
+        if (!result || typeof result !== "object" || Array.isArray(result)) {
+          return { ok: false, status: resp.status, error: "Hub returned an invalid response" };
+        }
+        if (result.error || result.ok === false || result.success === false) {
+          return { ok: false, status: resp.status, error: `Hub rejected message: ${text.slice(0, 150)}` };
+        }
+        return { ok: true, status: resp.status };
+      }
       lastErr = `${resp.status}: ${text.slice(0, 150)}`;
       if (resp.status < 500) return { ok: false, status: resp.status, error: lastErr };
     } catch (err: any) {

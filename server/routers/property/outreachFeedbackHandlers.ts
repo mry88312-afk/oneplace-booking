@@ -133,7 +133,12 @@ export async function notifyHelp(row: FeedbackRow, items: string[], note: string
     `時間：${nowTaipei()}\n請盡快聯繫關心 🙏`;
   for (const uid of notifyUids) {
     try {
-      await relayPush(uid, { type: "text", text }, { record: false });
+      // The production relay requires recordUid. Keep feedback notifications
+      // in the recipient's message history so their delivery can be audited.
+      const result = await relayPush(uid, { type: "text", text });
+      if (!result.success) {
+        console.error(`[feedback] notify ${String(uid).slice(0, 8)}… failed: ${result.error || "relay rejected message"}`);
+      }
     } catch (e: any) {
       console.error(`[feedback] notify ${String(uid).slice(0, 8)}… failed: ${e?.message || e}`);
     }
