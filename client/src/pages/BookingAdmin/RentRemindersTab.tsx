@@ -96,8 +96,9 @@ export function RentRemindersTab() {
           <td className="py-2 pr-3">{d.billName}<br />
             <a href={`https://www.jgbsmart.com/bills/all?keyword=${encodeURIComponent(d.billId)}&keyword_for=id&page=1&sort=3`}
               target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline">
-              JGB ID：{d.billId}
+              JGB 帳單 ID：{d.billId}
             </a>
+            <br /><span className="text-xs text-muted-foreground">JGB 合約 ID：{d.jgbContractId || "—"}</span>
           </td>
           <td className="py-2 pr-3 whitespace-nowrap">
             {typeof d.days !== "number" || !Number.isFinite(d.days) ? "日期不明" : d.days > 0 ? `逾期 ${d.days} 天` : "尚未逾期"}
