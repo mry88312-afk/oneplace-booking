@@ -98,9 +98,12 @@ function resolveRelayUrl(): string {
 export async function postToHub(
   url: string,
   body: any,
-): Promise<{ ok: boolean; status?: number; error?: string }> {
+  opts?: { once?: boolean; requireMessageId?: boolean },
+): Promise<{ ok: boolean; status?: number; error?: string; messageId?: string }> {
+  if (opts?.once && !process.env.BOOKING_WEBHOOK_SECRET)
+    return { ok: false, error: "BOOKING_WEBHOOK_SECRET 未設定" };
   const secret = process.env.BOOKING_WEBHOOK_SECRET || DEFAULT_WEBHOOK_SECRET;
-  const delaysMs = [0, 3000, 10000];
+  const delaysMs = opts?.once ? [0] : [0, 3000, 10000];
   let lastErr = "";
   for (const delay of delaysMs) {
     if (delay) await new Promise((r) => setTimeout(r, delay));
@@ -109,7 +112,7 @@ export async function postToHub(
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(opts?.once ? 15000 : 8000),
       });
       const text = await resp.text().catch(() => "");
       if (resp.ok) {
@@ -124,15 +127,21 @@ export async function postToHub(
         if (!result || typeof result !== "object" || Array.isArray(result)) {
           return { ok: false, status: resp.status, error: "Hub returned an invalid response" };
         }
+        if (opts?.requireMessageId) {
+          const id = result.sentMessages?.[0]?.id;
+          if (!result.error && result.ok !== false && result.success !== false && typeof id === "string" && id.length)
+            return { ok: true, status: resp.status, messageId: id };
+          return { ok: false, status: resp.status, error: "未取得 LINE 接受回執，請核對，勿重送" };
+        }
         if (result.error || result.ok === false || result.success === false) {
           return { ok: false, status: resp.status, error: `Hub rejected message: ${text.slice(0, 150)}` };
         }
         return { ok: true, status: resp.status };
       }
-      lastErr = `${resp.status}: ${text.slice(0, 150)}`;
+      lastErr = opts?.once ? `發送未確認（HTTP ${resp.status}），請核對，勿重送` : `${resp.status}: ${text.slice(0, 150)}`;
       if (resp.status < 500) return { ok: false, status: resp.status, error: lastErr };
     } catch (err: any) {
-      lastErr = err?.message || String(err);
+      lastErr = opts?.once ? "發送結果不明（連線中斷或逾時），請核對，勿重送" : err?.message || String(err);
     }
   }
   return { ok: false, error: lastErr };
@@ -177,6 +186,16 @@ export async function relayPush(
   return relayToLine("push", { to: uid, messages: [flexMessage] }, {
     recordUid: opts?.record === false ? undefined : uid,
   });
+}
+
+/** Financial reminders: one attempt only; an ambiguous response must never trigger a retry. */
+export async function relayPushOnce(
+  uid: string, message: object,
+): Promise<{ accepted: boolean; messageId?: string; error?: string }> {
+  const result = await postToHub(resolveRelayUrl(),
+    { lineEndpoint: "push", payload: { to: uid, messages: [message] }, recordUid: uid },
+    { once: true, requireMessageId: true });
+  return { accepted: result.ok, messageId: result.messageId, error: result.error };
 }
 
 /**
