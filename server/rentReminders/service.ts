@@ -1,6 +1,6 @@
 import { sbQuery } from "../db/supabaseClient";
 import { relayPushOnce } from "../routers/property/bookingConfirmHandler";
-import { Bill, Identity, TAG, PREFIX, buildFlex, decide, inSendWindow, overdueDays, taipeiDate } from "./domain";
+import { Bill, Identity, TAG, PREFIX, buildFlex, decide, inSendWindow, overdueDays, taipeiDate, tenantInboxUrl } from "./domain";
 import { fetchCurrentBills } from "./source";
 
 export async function loadIdentities(ids: string[]): Promise<Identity[]> {
@@ -22,15 +22,16 @@ export async function loadIdentities(ids: string[]): Promise<Identity[]> {
       (trim(c.jgb_id::text)=any($1::text[]) or trim(c.legacy_snapshot->>'1007543')=any($1::text[]))`, [ids]);
 }
 export type Decision = {
-  billId: string; billName: string; room: string; tenantName: string; contractNo: string;
-  total: number; days: number | null; eligible: boolean; reason: string; uidMask: string | null;
+  billId: string; jgbContractId: string; billName: string; room: string; tenantName: string; contractNo: string;
+  total: number; days: number | null; eligible: boolean; reason: string; uidMask: string | null; inboxUrl: string | null;
 };
 function assess(bills: Bill[], identities: Identity[], today: string): Decision[] {
   return bills.map(b => {
     const d = decide(b, identities, today);
     const days = overdueDays(b.due, today);
-    return { billId: b.id, billName: b.name, room: b.room, tenantName: d.identity?.tenant_name ?? "",
+    return { billId: b.id, jgbContractId: b.contractId, billName: b.name, room: b.room, tenantName: d.identity?.tenant_name ?? "",
       contractNo: d.identity?.contract_no ?? "", total: b.total, days: Number.isFinite(days) ? days : null,
+      inboxUrl: tenantInboxUrl(b.contractId, identities),
       eligible: d.eligible, reason: d.reason, uidMask: d.identity?.uid ? `${d.identity.uid.slice(0, 5)}…${d.identity.uid.slice(-6)}` : null };
   });
 }

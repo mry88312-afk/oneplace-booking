@@ -30,10 +30,21 @@ export function inSendWindow(now: Date, start: string): boolean {
   const local = new Date(+now + 8 * 3600_000).toISOString();
   return local.slice(0, 10) >= start && local.slice(11, 16) >= "12:00" && local.slice(11, 16) < "12:15";
 }
-export function decide(bill: Bill, identities: Identity[] | unknown, today: string) {
+function matchingIdentities(contractId: string, identities: Identity[] | unknown): Identity[] {
   const rows: Identity[] = Array.isArray(identities) ? identities : [];
-  const matches = rows.filter(r => r && (String(r.jgb_id ?? "").trim() === bill.contractId ||
-    String(r.raw_jgb_id ?? "").trim() === bill.contractId));
+  return rows.filter(r => r && (String(r.jgb_id ?? "").trim() === contractId ||
+    String(r.raw_jgb_id ?? "").trim() === contractId));
+}
+export function tenantInboxUrl(contractId: string, identities: Identity[] | unknown): string | null {
+  const matches = matchingIdentities(contractId, identities);
+  if (matches.length !== 1) return null;
+  const r = matches[0];
+  if (!r.tenant_id || !r.tenant_name || !r.uid || !/^U[0-9a-f]{32}$/i.test(r.uid) || r.uid_conflict) return null;
+  if (r.jgb_id && r.raw_jgb_id && String(r.jgb_id).trim() !== String(r.raw_jgb_id).trim()) return null;
+  return `https://fieldops.zeabur.app/inbox?uid=${encodeURIComponent(r.uid)}`;
+}
+export function decide(bill: Bill, identities: Identity[] | unknown, today: string) {
+  const matches = matchingIdentities(bill.contractId, identities);
   const names = [bill.payer, ...matches.map(r => r.tenant_name)].map(normalize);
   const blocked = (reason: string) => ({ eligible: false as const, reason, identity: matches[0] ?? null });
   if (names.some(n => n === "游凰儀" || n === "藍堂嘉")) return blocked("示範資料");

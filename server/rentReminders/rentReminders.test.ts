@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Bill, Identity, buildFlex, decide, inSendWindow, overdueDays, taipeiDate } from "./domain";
+import { Bill, Identity, buildFlex, decide, inSendWindow, overdueDays, taipeiDate, tenantInboxUrl } from "./domain";
 import { parseRows, parseWorkbook } from "./source";
 import ExcelJS from "exceljs";
 import { runRentReminders } from "./service";
@@ -51,6 +51,19 @@ test("壞數字／日期／明細不允許通知，卡片顯示整張金額與�
   assert.match(message, /已逾期 80 天/);
   assert.match(message, /10,500/);
   assert.match(message, /水電/);
+});
+test("租客對話以唯一合約主承租人 UID 開啟，缺漏與衝突不提供連結", () => {
+  assert.equal(tenantInboxUrl("456", [identity]), `https://fieldops.zeabur.app/inbox?uid=${identity.uid}`);
+  assert.equal(tenantInboxUrl("456", [{ ...identity, jgb_id: "456", raw_jgb_id: null }]),
+    `https://fieldops.zeabur.app/inbox?uid=${identity.uid}`);
+  // Conversation access remains available when a bill is not currently eligible for reminders.
+  assert.ok(tenantInboxUrl("456", [{ ...identity, status: "cancelled", end_date: "2025-01-01" }]));
+  for (const rows of [null, [], [identity, identity], [{ ...identity, jgb_id: "999" }],
+    [{ ...identity, uid: null }], [{ ...identity, uid: "Ubad&other=1" }],
+    [{ ...identity, uid_conflict: true }], [{ ...identity, tenant_id: null }]]) {
+    assert.equal(tenantInboxUrl("456", rows), null);
+  }
+  assert.equal(tenantInboxUrl("999", [identity]), null);
 });
 const feeNames = ["租金", "押金", "車位租金", "車位押金", "電費", "水費", "瓦斯費", "網路費", "第四台",
   "管理費", "車位管理費", "清潔費", "公共服務維護費用", "行政費用", "-續約＿押金遞延", "-折扣"];

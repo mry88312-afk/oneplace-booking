@@ -90,10 +90,24 @@ export function RentRemindersTab() {
       <h3 className="font-semibold">{preview.data ? "目前名單預覽" : "最近一次核對名單"}</h3>
       <p className="text-xs text-muted-foreground">資料時間：{time(preview.data?.sourceAt ?? latest?.source_at)}；符合提醒 {eligible.length} 張。實際發送仍以當日重新核對結果為準。</p>
       <div className="max-h-[420px] overflow-auto"><table className="w-full text-sm min-w-[650px]">
-        <thead><tr className="border-b text-left">{["承租人／房屋", "帳單", "金額", "核對結果"].map(x => <th className="py-2 pr-3" key={x}>{x}</th>)}</tr></thead>
+        <thead><tr className="border-b text-left">{["承租人／房屋", "帳單", "逾期天數", "金額", "核對結果"].map(x => <th className="py-2 pr-3" key={x}>{x}</th>)}</tr></thead>
         <tbody>{[...decisions].sort((a, b) => Number(b.eligible) - Number(a.eligible)).map(d => <tr key={d.billId} className="border-b">
-          <td className="py-2 pr-3">{d.tenantName || "尚未對應"}<br /><span className="text-xs text-muted-foreground">{d.room}</span></td>
-          <td className="py-2 pr-3">{d.billName}<br /><span className="text-xs text-muted-foreground">#{d.billId}</span></td>
+          <td className="py-2 pr-3">
+            {d.inboxUrl && /^https:\/\/fieldops\.zeabur\.app\/inbox\?uid=U[0-9a-f]{32}$/i.test(d.inboxUrl)
+              ? <a href={d.inboxUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">{d.tenantName}</a>
+              : d.tenantName || "尚未對應"}
+            <br /><span className="text-xs text-muted-foreground">{d.room}</span>
+          </td>
+          <td className="py-2 pr-3">{d.billName}<br />
+            <a href={`https://www.jgbsmart.com/bills/all?keyword=${encodeURIComponent(d.billId)}&keyword_for=id&page=1&sort=3`}
+              target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline">
+              JGB 帳單 ID：{d.billId}
+            </a>
+            <br /><span className="text-xs text-muted-foreground">JGB 合約 ID：{d.jgbContractId || "—"}</span>
+          </td>
+          <td className="py-2 pr-3 whitespace-nowrap">
+            {typeof d.days !== "number" || !Number.isFinite(d.days) ? "日期不明" : d.days > 0 ? `逾期 ${d.days} 天` : "尚未逾期"}
+          </td>
           <td className="py-2 pr-3 whitespace-nowrap">{money(d.total)}</td>
           <td className={`py-2 pr-3 ${d.eligible ? "text-green-700" : "text-muted-foreground"}`}>{d.reason}</td>
         </tr>)}</tbody>
