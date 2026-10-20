@@ -15,6 +15,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RenewalDueTab } from "./RenewalDueTab";
+import { RentRemindersTab } from "./RentRemindersTab";
 import { toast } from "sonner";
 import {
   Loader2, Send, CalendarClock, SkipForward, Check, RotateCcw, RefreshCw, Save, AlertTriangle, Copy, Sparkles, Eye, Download,
@@ -268,12 +269,14 @@ function ScheduleTab({ rules }: { rules: any[] }) {
   const totalCount = rules.reduce((a: number, r: any) => a + ruleCount(r.key), 0);
 
   const batchBusy = batchUpdate.isPending || batchSend.isPending;
-  const allVisibleSelected = rows.length > 0 && rows.every((r: any) => selected.has(r.id));
-  const toggleAll = () => setSelected(allVisibleSelected ? new Set() : new Set(rows.map((r: any) => r.id)));
+  const selectableRows = rows.filter((r: any) => !r.dedupe_key?.startsWith("jgb-rent:"));
+  const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((r: any) => selected.has(r.id));
+  const toggleAll = () => setSelected(allVisibleSelected ? new Set() : new Set(selectableRows.map((r: any) => r.id)));
   const toggleOne = (id: string) =>
     setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const rowCard = (r: any) => {
+    const isRent = r.dedupe_key?.startsWith("jgb-rent:");
     const st = STATUS_MAP[r.status] || { label: r.status, color: "bg-muted text-muted-foreground" };
     const canSend = r.status === "pending" || r.status === "confirmed";
     return (
@@ -281,7 +284,7 @@ function ScheduleTab({ rules }: { rules: any[] }) {
         <CardContent className="py-3">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="flex items-start gap-2 flex-1 min-w-0">
-              <Checkbox className="mt-1" checked={selected.has(r.id)} onCheckedChange={() => toggleOne(r.id)} />
+              <Checkbox className="mt-1" disabled={isRent} checked={selected.has(r.id)} onCheckedChange={() => toggleOne(r.id)} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="font-mono text-sm font-semibold">{r.scheduled_date}</span>
@@ -312,7 +315,7 @@ function ScheduleTab({ rules }: { rules: any[] }) {
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            {!isRent && <div className="flex items-center gap-1.5 flex-wrap justify-end">
               <Button size="sm" variant="ghost" onClick={() => preview.mutate({ id: r.id })} disabled={preview.isPending} title="送到測試對象預覽，室友不會收到">
                 <Eye className="h-3.5 w-3.5 mr-1" /> 預覽
               </Button>
@@ -338,7 +341,7 @@ function ScheduleTab({ rules }: { rules: any[] }) {
                   {view === "failed" ? "重送" : "立即送"}
                 </Button>
               )}
-            </div>
+            </div>}
           </div>
         </CardContent>
       </Card>
@@ -1101,8 +1104,9 @@ export function OutreachBoard() {
         </div>
       )}
       <Tabs defaultValue="schedule">
-        <TabsList>
+        <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="schedule">排程看板</TabsTrigger>
+          <TabsTrigger value="rent">租金提醒</TabsTrigger>
           <TabsTrigger value="rules">規則 / 卡片</TabsTrigger>
           <TabsTrigger value="stats">成效</TabsTrigger>
           <TabsTrigger value="unbound">未綁UID</TabsTrigger>
@@ -1112,6 +1116,9 @@ export function OutreachBoard() {
         </TabsList>
         <TabsContent value="schedule" className="mt-4">
           <ScheduleTab rules={(rulesQuery.data || []) as any[]} />
+        </TabsContent>
+        <TabsContent value="rent" className="mt-4">
+          <RentRemindersTab />
         </TabsContent>
         <TabsContent value="rules" className="mt-4">
           <RulesTab />

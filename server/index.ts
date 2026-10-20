@@ -54,7 +54,7 @@ async function startServer() {
 
   // 週期詢問：Supabase pg_cron 透過 pg_net 呼叫此端點，派送「到期且已確認」的卡片。
   // 需帶共享密鑰 header（x-outreach-secret 必須等於環境變數 OUTREACH_RUN_SECRET）。
-  app.post("/api/outreach/run", async (req, res) => {
+  app.post(["/api/outreach/run", "/api/outreach/rent-reminders"], async (req, res) => {
     const expected = process.env.OUTREACH_RUN_SECRET;
     if (!expected) {
       return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
@@ -67,6 +67,11 @@ async function startServer() {
     }
     const ids = Array.isArray(req.body?.schedule_ids) ? req.body.schedule_ids : [];
     try {
+      if (req.path === "/api/outreach/rent-reminders") {
+        const { runRentReminders } = await import("./rentReminders/service");
+        const result = await runRentReminders();
+        return res.status("error" in result ? 503 : 200).json(result);
+      }
       const { runOutreach } = await import("./routers/property/outreachHandlers");
       const result = await runOutreach(ids);
       console.log(`[outreach] run for ${ids.length} ids → ${JSON.stringify(result)}`);

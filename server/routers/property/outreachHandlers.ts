@@ -17,6 +17,7 @@ import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { relayPush } from "./bookingConfirmHandler";
+import { rentHistory, previewRentReminders, setRentEnabled } from "../../rentReminders/service";
 
 type ScheduleRow = {
   id: string;
@@ -37,6 +38,7 @@ type ScheduleRow = {
   alt_text?: string | null;
   vars?: Record<string, any> | null;
   card_override?: any;
+  dedupe_key?: string;
 };
 
 /** 把卡片範本內的 {{變數}} 換成實際值（JSON-safe）。 */
@@ -141,8 +143,14 @@ async function markSendFailure(id: string, errMsg: string): Promise<void> {
   );
 }
 
+async function guardRentSchedule(id: string) {
+  const rows = await sbQuery(`select id from outreach.schedule where id=$1 and dedupe_key like 'jgb-rent:%'`, [id]);
+  if (rows.length) throw new TRPCError({ code: "BAD_REQUEST", message: "租金提醒由每日核對流程管理，請至「租金提醒」查看或暫停；不能改期或重送。" });
+}
+
 /** 確認單筆（僅 pending/skipped 可確認）；回報是否成功與原因，供批次重用。 */
 async function confirmOne(id: string): Promise<{ id: string; ok: boolean; error?: string }> {
+  await guardRentSchedule(id);
   const r = await sbQuery<{ id: string }>(
     `update outreach.schedule set status='confirmed', updated_at=now()
       where id=$1 and status in ('pending','skipped') returning id`,
@@ -156,6 +164,7 @@ async function confirmOne(id: string): Promise<{ id: string; ok: boolean; error?
 
 /** 跳過單筆（已發送/取消者不可跳過）；回報是否成功與原因，供批次重用。 */
 async function skipOne(id: string): Promise<{ id: string; ok: boolean; error?: string }> {
+  await guardRentSchedule(id);
   const r = await sbQuery<{ id: string }>(
     `update outreach.schedule set status='skipped', updated_at=now()
       where id=$1 and status in ('pending','confirmed','skipped') returning id`,
@@ -183,7 +192,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
             to_char(s.contract_end_date, 'YYYY-MM-DD') as contract_end_date,
             s.rule_key, to_char(s.scheduled_date, 'YYYY-MM-DD') as scheduled_date,
             s.status, s.manually_edited, s.suppressed_reason, s.sent_at,
-            s.source, s.recipient_phone, s.alt_text, s.vars, s.card_override,
+            s.source, s.recipient_phone, s.alt_text, s.vars, s.card_override, s.dedupe_key,
             r.card_template, r.label as rule_label
        from outreach.schedule s
        left join outreach.rule r on r.key = s.rule_key
@@ -201,6 +210,10 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
 
   for (const row of rows) {
     try {
+      if (row.dedupe_key?.startsWith("jgb-rent:")) {
+        result.skipped++;
+        continue; // Financial reminders can only run through their fresh-source, once-per-day gate.
+      }
       if (row.status !== "pending" && row.status !== "confirmed") {
         result.skipped++;
         continue;
@@ -490,7 +503,7 @@ const SCHEDULE_COLS =
    status, manually_edited, suppressed_reason,
    to_char(sent_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as sent_at,
    last_error, to_char(last_attempt_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as last_attempt_at, attempt_count,
-   source, tag, to_char(send_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as send_at`;
+   source, tag, dedupe_key, to_char(send_at at time zone 'Asia/Taipei','YYYY-MM-DD HH24:MI') as send_at`;
 
 /** 合約到期(≤thresholdDays 天或已過期)＋沒預約續約/退租 的名單（跨 Supabase 合約 × TiDB 預約）。
  *
@@ -556,6 +569,10 @@ async function scanRenewalDueList(thresholdDays: number) {
 }
 
 export const outreachRouter = router({
+  rentHistory: adminProcedure.query(rentHistory),
+  previewRentReminders: adminProcedure.mutation(previewRentReminders),
+  setRentEnabled: adminProcedure.input(z.object({ enabled: z.boolean() }))
+    .mutation(({ input }) => setRentEnabled(input.enabled)),
   /** 後台是否已接上 Supabase（給前端顯示提示用） */
   health: adminProcedure.query(() => ({ supabaseConfigured: isSupabaseConfigured() })),
 
@@ -687,6 +704,7 @@ export const outreachRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      await guardRentSchedule(input.id);
       switch (input.action) {
         case "reschedule": {
           if (!input.scheduledDate)
@@ -740,6 +758,7 @@ export const outreachRouter = router({
   sendNow: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input }) => {
+      await guardRentSchedule(input.id);
       return await runOutreach([input.id]);
     }),
 
