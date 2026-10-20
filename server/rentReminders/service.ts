@@ -1,6 +1,6 @@
 import { sbQuery } from "../db/supabaseClient";
 import { relayPushOnce } from "../routers/property/bookingConfirmHandler";
-import { Bill, Identity, TAG, PREFIX, buildFlex, decide, inSendWindow, overdueDays, taipeiDate } from "./domain";
+import { Bill, Identity, TAG, PREFIX, buildFlex, decide, inSendWindow, overdueDays, taipeiDate, tenantInboxUrl } from "./domain";
 import { fetchCurrentBills } from "./source";
 
 export async function loadIdentities(ids: string[]): Promise<Identity[]> {
@@ -23,7 +23,7 @@ export async function loadIdentities(ids: string[]): Promise<Identity[]> {
 }
 export type Decision = {
   billId: string; jgbContractId: string; billName: string; room: string; tenantName: string; contractNo: string;
-  total: number; days: number | null; eligible: boolean; reason: string; uidMask: string | null;
+  total: number; days: number | null; eligible: boolean; reason: string; uidMask: string | null; inboxUrl: string | null;
 };
 function assess(bills: Bill[], identities: Identity[], today: string): Decision[] {
   return bills.map(b => {
@@ -31,6 +31,7 @@ function assess(bills: Bill[], identities: Identity[], today: string): Decision[
     const days = overdueDays(b.due, today);
     return { billId: b.id, jgbContractId: b.contractId, billName: b.name, room: b.room, tenantName: d.identity?.tenant_name ?? "",
       contractNo: d.identity?.contract_no ?? "", total: b.total, days: Number.isFinite(days) ? days : null,
+      inboxUrl: tenantInboxUrl(b.contractId, identities),
       eligible: d.eligible, reason: d.reason, uidMask: d.identity?.uid ? `${d.identity.uid.slice(0, 5)}…${d.identity.uid.slice(-6)}` : null };
   });
 }

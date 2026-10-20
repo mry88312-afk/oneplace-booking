@@ -92,7 +92,12 @@ export function RentRemindersTab() {
       <div className="max-h-[420px] overflow-auto"><table className="w-full text-sm min-w-[650px]">
         <thead><tr className="border-b text-left">{["承租人／房屋", "帳單", "逾期天數", "金額", "核對結果"].map(x => <th className="py-2 pr-3" key={x}>{x}</th>)}</tr></thead>
         <tbody>{[...decisions].sort((a, b) => Number(b.eligible) - Number(a.eligible)).map(d => <tr key={d.billId} className="border-b">
-          <td className="py-2 pr-3">{d.tenantName || "尚未對應"}<br /><span className="text-xs text-muted-foreground">{d.room}</span></td>
+          <td className="py-2 pr-3">
+            {d.inboxUrl && /^https:\/\/fieldops\.zeabur\.app\/inbox\?uid=U[0-9a-f]{32}$/i.test(d.inboxUrl)
+              ? <a href={d.inboxUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">{d.tenantName}</a>
+              : d.tenantName || "尚未對應"}
+            <br /><span className="text-xs text-muted-foreground">{d.room}</span>
+          </td>
           <td className="py-2 pr-3">{d.billName}<br />
             <a href={`https://www.jgbsmart.com/bills/all?keyword=${encodeURIComponent(d.billId)}&keyword_for=id&page=1&sort=3`}
               target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline">
