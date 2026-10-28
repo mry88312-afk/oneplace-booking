@@ -1,9 +1,14 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { publicErrorMessage } from "../../shared/bookingErrors";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  errorFormatter({ shape }) {
+    const { stack: _stack, ...data } = shape.data;
+    return { ...shape, message: publicErrorMessage(shape.message, shape.data.code), data };
+  },
 });
 
 export const router = t.router;

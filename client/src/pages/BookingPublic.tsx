@@ -3,6 +3,8 @@ import { useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import liff from "@line/liff";
+import { bookingRequest, confirmBookingRequest } from "@/lib/bookingRequest";
+import { publicErrorMessage } from "@shared/bookingErrors";
 
 import {
   getTaipeiNow, toDateStr,
@@ -66,6 +68,7 @@ export default function BookingPublic() {
   // 初始從 URL 讀取 uid（不依賴 LIFF，直接可用）
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const initialParams = useMemo(() => new URLSearchParams(initialSearch), [initialSearch]);
+  const actionDatasetId = initialParams.get('dataset') || undefined;
   const uidFromUrl = initialParams.get("uid") || "";
   const debugMode = initialParams.get("debug") === "1";
 
@@ -355,19 +358,29 @@ export default function BookingPublic() {
     onError: (err) => { setIsVerifying(false); toast.error(err.message || "建立資料失敗"); },
   });
 
+  const submissionRef = useRef<{ storageKey: string; requestId: string } | null>(null);
   const confirmMutation = trpc.booking.confirmBooking.useMutation({
     onSuccess: (data) => {
+      if (!data.success) {
+        toast.warning(data.message, { duration: 12000 });
+        setIsBooking(false);
+        return;
+      }
+      try {
+        const receipt = submissionRef.current;
+        if (receipt) confirmBookingRequest(localStorage, receipt.storageKey, receipt.requestId);
+      } catch { /* Preserve the completed response even if storage becomes unavailable. */ }
       setBookingResult({ success: true, bookingId: data.bookingId });
       setView("success"); setIsBooking(false);
     },
-    onError: (err) => { toast.error(err.message || "預約失敗"); setIsBooking(false); },
+    onError: (err) => { toast.error(publicErrorMessage(err.message, err.data?.code)); setIsBooking(false); },
     onSettled: () => { inFlightRef.current = false; },
   });
 
   // P23：卡片動作（變更時間 / 取消）
   const effectiveActionUid = lineUserId || uid;
   const rescheduleInfoQuery = trpc.booking.getBookingForReschedule.useQuery(
-    { bookingId: actionBookingId!, uid: effectiveActionUid! },
+    { bookingId: actionBookingId!, uid: effectiveActionUid!, datasetId: actionDatasetId },
     { enabled: isActionMode && !!actionBookingId && !!effectiveActionUid, retry: false },
   );
   const cancelMutation = trpc.booking.cancelBookingPublic.useMutation({
@@ -513,7 +526,7 @@ export default function BookingPublic() {
     inFlightRef.current = true;
     setIsBooking(true);
     rescheduleMutation.mutate({
-      bookingId: actionBookingId, uid: effectiveActionUid,
+      bookingId: actionBookingId, uid: effectiveActionUid, datasetId: actionDatasetId,
       date: selectedDate, startTime: slot.startTime, endTime: slot.endTime,
       calendarId: slot.calendarId || calendarId, assigneeName: slot.calendarOwner || calendarOwner,
     });
@@ -521,7 +534,7 @@ export default function BookingPublic() {
   // P23：取消送出
   const handleCancelConfirm = () => {
     if (!actionBookingId || !effectiveActionUid) return toast.error("缺少預約識別，請重新從卡片開啟");
-    cancelMutation.mutate({ bookingId: actionBookingId, uid: effectiveActionUid });
+    cancelMutation.mutate({ bookingId: actionBookingId, uid: effectiveActionUid, datasetId: actionDatasetId });
   };
 
   const handleConfirmSlot = () => {
@@ -582,10 +595,22 @@ export default function BookingPublic() {
 
   const doBooking = (slot: { startTime: string; endTime: string; calendarId?: string; calendarOwner?: string }) => {
     if (inFlightRef.current) return; // 防重複送出
+    if (!template?.writesEnabled) return toast.error('預約服務暫時維護中，請稍後再試或聯繫小幫手。');
+    const bookingUid = uid || lineUserId || phoneInput.trim() || "unknown";
+    try {
+      submissionRef.current = bookingRequest(localStorage,
+        JSON.stringify([template?.datasetId, projectId, bookingUid, roomNumber]),
+        JSON.stringify([slot.startTime, slot.endTime, slot.calendarId || calendarId]));
+    } catch {
+      toast.error("無法保存預約識別，請改用一般瀏覽器開啟原連結。");
+      return;
+    }
     inFlightRef.current = true;
     setIsBooking(true);
     confirmMutation.mutate({
-      projectId, uid: uid || lineUserId || phoneInput.trim() || "unknown",
+      requestId: submissionRef.current.requestId,
+      datasetId: template?.datasetId || undefined,
+      projectId, uid: bookingUid,
       tenantName, roomNumber, date: selectedDate,
       startTime: slot.startTime, endTime: slot.endTime,
       calendarId: slot.calendarId || calendarId, assigneeName: slot.calendarOwner || calendarOwner,

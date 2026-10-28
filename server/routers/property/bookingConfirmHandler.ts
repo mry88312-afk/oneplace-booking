@@ -1,4 +1,5 @@
-﻿/**
+import { assertBookingDataset, assertBookingWritesEnabled, bookingActionUrl } from "../../booking/runtime";
+/**
  * Handler for confirmBooking procedure（Zeabur 拆分版）.
  *
  * 與主系統的差異：
@@ -8,10 +9,11 @@
  */
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../../db";
-import * as schema from "../../../drizzle/schema";
-import { eq } from "drizzle-orm";
 import { ragicPost, ragicPut, ragicUploadFile, bookingRateMap, resolveTemplateBundle } from "./bookingHelpers";
 import { sbQuery } from "../../db/supabaseClient";
+import { submissionIdentity, persistedAnswers, submitBookingOnce } from "../../booking/submission";
+import { createSubmissionStore } from "../../booking/submissionStore";
+import { BOOKING_REFRESH, BOOKING_UNAVAILABLE, errorCode } from "../../../shared/bookingErrors";
 
 /**
  * P102：所有對外 LINE 訊息一律經新站台（fieldops.zeabur.app）代發，禁止直打 LINE API。
@@ -199,7 +201,7 @@ export async function relayPushOnce(
 }
 
 /**
- * P87：Ragic 任務寫入失敗時，發 LINE 文字告警給員工，讓同事能人工補建任務＋日曆。
+ * Ragic 或本機儲存結果不明時告警，先核對原任務；不可直接補建。
  * 這是 2026-07 Ragic 擋中文事件後補的安全網——就算 Ragic 再出狀況，也不會像那次一樣無聲吃掉預約。
  * 名單來源：env BOOKING_ALERT_UIDS（逗號/空白/分號分隔）優先，否則沿用 outreach.settings.notify_uids。
  * 全程 try/catch，告警本身絕不影響（也絕不中斷）預約主流程。
@@ -212,6 +214,7 @@ export async function notifyBookingWriteFailure(info: {
   bookingId: number | string;
   uid: string;
   error: string;
+  ragicRecordId?: string;
 }): Promise<void> {
   try {
     let uids: string[] = [];
@@ -225,24 +228,24 @@ export async function notifyBookingWriteFailure(info: {
         );
         uids = (rows[0]?.notify_uids || "").split(/[,\s;]+/).filter(Boolean);
       } catch (e: any) {
-        console.error("[Booking][ALERT] 讀 outreach.settings 通知名單失敗:", e?.message);
+        console.error("[Booking][ALERT] 讀 outreach.settings 通知名單失敗:", errorCode(e));
       }
     }
     const t = new Date(new Date(info.startTime).getTime() + 8 * 3600000);
     const when = `${t.getUTCFullYear()}/${String(t.getUTCMonth() + 1).padStart(2, "0")}/${String(t.getUTCDate()).padStart(2, "0")} ${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
     const text =
-      `⚠️ 預約未寫入 Ragic，請人工補建任務＋Google 日曆\n\n` +
+      `⚠️ 預約待核對，請先查原任務與日曆，勿重複建單\n\n` +
       `類型：${info.templateType}\n姓名：${info.tenantName}\n房號：${info.roomNumber}\n時間：${when}\n` +
-      `預約編號：${info.bookingId}\nUID：${info.uid}\n\n原因：${String(info.error).slice(0, 300)}`;
+      `預約識別：${info.bookingId}\nRagic 任務：${info.ragicRecordId || "結果不明，需查核"}\nUID：${info.uid}\n\n處理階段：${info.error}`;
     console.error(
       `[Booking][ALERT] Ragic 寫入失敗，告警 ${uids.length} 位員工：`,
-      text.replace(/\n/g, " | "),
+      { bookingId: info.bookingId, ragicRecordId: info.ragicRecordId, stage: info.error },
     );
     for (const uid of uids) {
       await relayPush(uid, { type: "text", text }, { record: false }).catch(() => {});
     }
   } catch (e: any) {
-    console.error("[Booking][ALERT] 告警流程本身失敗:", e?.message || e);
+    console.error("[Booking][ALERT] 告警流程本身失敗:", errorCode(e));
   }
 }
 
@@ -482,6 +485,8 @@ function buildCheckoutCleaningCarousel() {
 
 export async function handleConfirmBooking(
   input: {
+    requestId?: string;
+    datasetId?: string;
     projectId: string;
     uid: string;
     tenantName: string;
@@ -502,8 +507,13 @@ export async function handleConfirmBooking(
   },
   ctx: any,
 ) {
+  assertBookingWritesEnabled();
+  assertBookingDataset(input.datasetId);
   const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  if (!db) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: BOOKING_UNAVAILABLE });
+  if (!input.requestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestId)) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: BOOKING_REFRESH });
+  }
 
   // Rate limiting — 每個 IP 每小時最多 10 次預約
   const clientIp =
@@ -604,169 +614,140 @@ export async function handleConfirmBooking(
     });
   }
 
-  // 1. 寫入 Ragic 任務表
-  let ragicRecordId = "";
-  let ragicWriteError: string | null = null;
-  try {
-    const startDt = new Date(input.startTime);
-    const taipeiOffset = 8 * 60 * 60 * 1000;
-    const taipeiTime = new Date(startDt.getTime() + taipeiOffset);
-    const ragicDateTime = `${taipeiTime.getUTCFullYear()}/${String(taipeiTime.getUTCMonth() + 1).padStart(2, "0")}/${String(taipeiTime.getUTCDate()).padStart(2, "0")} ${String(taipeiTime.getUTCHours()).padStart(2, "0")}:${String(taipeiTime.getUTCMinutes()).padStart(2, "0")}`;
-    const m = taipeiTime.getUTCMonth() + 1;
-    const d = taipeiTime.getUTCDate();
-    const taskName = `${m}/${d}${template.templateType}${input.roomNumber}(${input.tenantName})`;
-
-    const ragicData: Record<string, any> = {
-      "1012117": template.templateType,
-      "1012114": ragicDateTime,
-      "1012112": taskName,
-      "1012116": input.roomNumber,
-      "1012113": input.assigneeName,
-    };
-
-    const fileFieldsToUpload: Array<{ fieldId: string; fileUrl: string }> = [];
-    const allFields = bundle.fields;
-
-    for (const field of allFields) {
-      if (
-        field.fieldType === "line_uid" &&
-        field.ragicFieldId &&
-        input.uid &&
-        input.uid !== "unknown"
-      ) {
-        ragicData[field.ragicFieldId] = input.uid;
-        continue;
-      }
-      if (
-        field.fieldType === "inbox_url" &&
-        field.ragicFieldId &&
-        input.uid &&
-        input.uid !== "unknown"
-      ) {
-        // 注意：對話網址指向主系統的客服介面
-        const inboxBase =
-          process.env.MAIN_SYSTEM_INBOX_URL ||
-          "https://fieldops.zeabur.app/inbox";
-        ragicData[field.ragicFieldId] = `${inboxBase}?uid=${input.uid}`;
-        continue;
-      }
-      if (
-        field.ragicFieldId &&
-        input.formAnswers &&
-        input.formAnswers[field.label]
-      ) {
-        let value = input.formAnswers[field.label];
-        if (typeof value === "string" && value.includes("__other__")) {
-          const otherKey = `${field.label}__other`;
-          const otherText =
-            (input.formAnswers as Record<string, string>)[otherKey] || "";
-          const parts = value
-            .split(",")
-            .filter(Boolean)
-            .map((v: string) =>
-              v.trim() === "__other__"
-                ? otherText
-                  ? `其他：${otherText}`
-                  : "其他"
-                : v.trim(),
-            )
-            .filter(Boolean);
-          value = parts.join(",");
-        }
-        if (field.fieldType === "file") {
-          const urls = parseFileUrls(value);
-          for (const url of urls) {
-            fileFieldsToUpload.push({ fieldId: field.ragicFieldId, fileUrl: url });
-          }
-        } else {
-          ragicData[field.ragicFieldId] = value;
-        }
-      }
-    }
-
-    // 線上續約標記：讓同事在 Ragic 一眼看出這筆是線上續約（/book/renewal）。
-    // ⚠️ projectId 必須是 "renewal"（線上續約 DB 模版）— 不是 "contract"（那是線下續約 /book/contract）。
-    //    P80 誤寫成 "contract"，導致線上續約從來沒被標記到；P83 修正為 "renewal"。
-    // 寫入 1013030（原「您的本名」欄；本名已不收，租客姓名仍在任務名 taskName 的 (tenantName) 內）。
-    if (template.projectId === "renewal") {
-      ragicData["1013030"] = "線上續約";
-    }
-
-    // 線上續約 合約期間：寫回 開始日(1013716)、到期日(1013717)；展延（未滿1年）強制月繳(1013721)+備註(1013722)。
-    // 視窗在前面已重抓並驗過（renewalStartDate/EndDate/IsExtension）。
-    if (renewalStartDate && renewalEndDate) {
-      ragicData["1013716"] = renewalStartDate;
-      ragicData["1013717"] = renewalEndDate;
-      if (renewalIsExtension) {
-        ragicData["1013721"] = "月繳";
-        ragicData["1013722"] = "展延＋2000元";
-      }
-    }
-
-    const result = await ragicPost(template.ragicTaskPath, ragicData);
-    ragicRecordId = String(result?.ragicId || "");
-    if (!ragicRecordId) {
-      // 沒丟錯但也沒拿到 ragicId（Ragic 回應異常）→ 一樣當寫入失敗，之後告警。
-      ragicWriteError = `Ragic 回應未含 ragicId：${JSON.stringify(result).slice(0, 200)}`;
-    }
-
-    if (ragicRecordId && fileFieldsToUpload.length > 0) {
-      const numericRagicId = Number(ragicRecordId);
-      if (!isNaN(numericRagicId)) {
-        for (const { fieldId, fileUrl } of fileFieldsToUpload) {
-          try {
-            await ragicUploadFile(
-              template.ragicTaskPath,
-              numericRagicId,
-              fieldId,
-              fileUrl,
-            );
-          } catch (uploadErr: any) {
-            console.error(
-              `[Booking] Ragic file upload error for field ${fieldId}:`,
-              uploadErr.message,
-            );
-          }
-        }
-      }
-    }
-  } catch (err: any) {
-    console.error("[Booking] Ragic POST error:", err.message);
-    ragicWriteError = err?.message || String(err);
-  }
-
-  // 2. 建立本地預約記錄
-  const bookingTime = new Date(input.startTime).getTime();
-  const [record] = await db.insert(schema.bookingRecords).values({
-    templateId: template.id,
-    tenantUid: input.uid,
-    tenantUserId: null,
-    tenantName: input.tenantName,
-    roomNumber: input.roomNumber,
-    address: input.address || null,
-    bookingTime,
-    durationMinutes: template.slotDurationMinutes,
-    assigneeName: input.assigneeName,
-    googleEventId: "",
-    googleCalendarId: input.calendarId,
-    ragicRecordId,
-    formAnswers: input.formAnswers || null,
-    status: "confirmed",
-  });
-
-  // 2b. Ragic 任務寫入失敗 → 告警員工人工補建（本地紀錄已寫、租客仍會收到確認卡，故靠告警補上動線）。
-  //     Fire-and-forget，絕不阻擋預約 response。
-  if (ragicWriteError) {
-    notifyBookingWriteFailure({
+  const fileFieldsToUpload: Array<{ fieldId: string; fileUrl: string }> = [];
+  const submission = await submitBookingOnce({
+    ...submissionIdentity(input.uid, input.requestId, input),
+    store: createSubmissionStore(db, { bookingTime: new Date(input.startTime).getTime(), calendarId: input.calendarId }),
+    record: {
+      templateId: template.id,
+      tenantUid: input.uid,
+      tenantUserId: null,
       tenantName: input.tenantName,
       roomNumber: input.roomNumber,
-      templateType: template.templateType || "預約",
-      startTime: input.startTime,
-      bookingId: record.insertId,
-      uid: input.uid,
-      error: ragicWriteError,
-    }).catch((e: any) => console.error("[Booking][ALERT] 觸發告警例外:", e?.message || e));
-  }
+      address: input.address || null,
+      bookingTime: new Date(input.startTime).getTime(),
+      durationMinutes: template.slotDurationMinutes,
+      assigneeName: input.assigneeName,
+      googleEventId: "",
+      googleCalendarId: input.calendarId,
+      formAnswers: persistedAnswers(input.formAnswers),
+      status: "confirmed",
+    },
+    createTask: async () => {
+      const startDt = new Date(input.startTime);
+      const taipeiOffset = 8 * 60 * 60 * 1000;
+      const taipeiTime = new Date(startDt.getTime() + taipeiOffset);
+      const ragicDateTime = `${taipeiTime.getUTCFullYear()}/${String(taipeiTime.getUTCMonth() + 1).padStart(2, "0")}/${String(taipeiTime.getUTCDate()).padStart(2, "0")} ${String(taipeiTime.getUTCHours()).padStart(2, "0")}:${String(taipeiTime.getUTCMinutes()).padStart(2, "0")}`;
+      const m = taipeiTime.getUTCMonth() + 1;
+      const d = taipeiTime.getUTCDate();
+      const taskName = `${m}/${d}${template.templateType}${input.roomNumber}(${input.tenantName})`;
+
+      const ragicData: Record<string, any> = {
+        "1012117": template.templateType,
+        "1012114": ragicDateTime,
+        "1012112": taskName,
+        "1012116": input.roomNumber,
+        "1012113": input.assigneeName,
+      };
+
+      const allFields = bundle.fields;
+
+      for (const field of allFields) {
+        if (
+          field.fieldType === "line_uid" &&
+          field.ragicFieldId &&
+          input.uid &&
+          input.uid !== "unknown"
+        ) {
+          ragicData[field.ragicFieldId] = input.uid;
+          continue;
+        }
+        if (
+          field.fieldType === "inbox_url" &&
+          field.ragicFieldId &&
+          input.uid &&
+          input.uid !== "unknown"
+        ) {
+          // 注意：對話網址指向主系統的客服介面
+          const inboxBase =
+            process.env.MAIN_SYSTEM_INBOX_URL ||
+            "https://fieldops.zeabur.app/inbox";
+          ragicData[field.ragicFieldId] = `${inboxBase}?uid=${input.uid}`;
+          continue;
+        }
+        if (
+          field.ragicFieldId &&
+          input.formAnswers &&
+          input.formAnswers[field.label]
+        ) {
+          let value = input.formAnswers[field.label];
+          if (typeof value === "string" && value.includes("__other__")) {
+            const otherKey = `${field.label}__other`;
+            const otherText =
+              (input.formAnswers as Record<string, string>)[otherKey] || "";
+            const parts = value
+              .split(",")
+              .filter(Boolean)
+              .map((v: string) =>
+                v.trim() === "__other__"
+                  ? otherText
+                    ? `其他：${otherText}`
+                    : "其他"
+                  : v.trim(),
+              )
+              .filter(Boolean);
+            value = parts.join(",");
+          }
+          if (field.fieldType === "file") {
+            const urls = parseFileUrls(value);
+            for (const url of urls) {
+              fileFieldsToUpload.push({ fieldId: field.ragicFieldId, fileUrl: url });
+            }
+          } else {
+            ragicData[field.ragicFieldId] = value;
+          }
+        }
+      }
+
+      // 線上續約標記：讓同事在 Ragic 一眼看出這筆是線上續約（/book/renewal）。
+      // ⚠️ projectId 必須是 "renewal"（線上續約 DB 模版）— 不是 "contract"（那是線下續約 /book/contract）。
+      //    P80 誤寫成 "contract"，導致線上續約從來沒被標記到；P83 修正為 "renewal"。
+      // 寫入 1013030（原「您的本名」欄；本名已不收，租客姓名仍在任務名 taskName 的 (tenantName) 內）。
+      if (template.projectId === "renewal") {
+        ragicData["1013030"] = "線上續約";
+      }
+
+      // 線上續約 合約期間：寫回 開始日(1013716)、到期日(1013717)；展延（未滿1年）強制月繳(1013721)+備註(1013722)。
+      // 視窗在前面已重抓並驗過（renewalStartDate/EndDate/IsExtension）。
+      if (renewalStartDate && renewalEndDate) {
+        ragicData["1013716"] = renewalStartDate;
+        ragicData["1013717"] = renewalEndDate;
+        if (renewalIsExtension) {
+          ragicData["1013721"] = "月繳";
+          ragicData["1013722"] = "展延＋2000元";
+        }
+      }
+
+      const result = await ragicPost(template.ragicTaskPath, ragicData);
+      return String(result?.ragicId ?? "");
+    },
+    uploadAttachments: async (ragicId) => {
+      for (const { fieldId, fileUrl } of fileFieldsToUpload) {
+        await ragicUploadFile(template.ragicTaskPath, Number(ragicId), fieldId, fileUrl);
+      }
+    },
+    onPending: async ({ key, stage, ragicRecordId }) => {
+      await notifyBookingWriteFailure({
+        tenantName: input.tenantName, roomNumber: input.roomNumber,
+        templateType: template.templateType || "預約", startTime: input.startTime,
+        bookingId: key.slice(0, 12), uid: input.uid, error: stage, ragicRecordId,
+      });
+    },
+  });
+  // Pending/replayed operations must not send success cards or repeat contract updates.
+  if (!submission.success || !submission.fresh) return submission;
+  const ragicRecordId = submission.ragicRecordId;
+  const record = { insertId: submission.bookingId };
 
   // 3. 回寫合約記錄（/go-back/22 欄位 1015394 = 續約 or 退租）
   if (input.contractRecordId && template.contractAction) {
@@ -776,7 +757,7 @@ export async function handleConfirmBooking(
       });
       console.log(`[Booking] 合約回寫成功：record ${input.contractRecordId} → 欄位 1015394="${template.contractAction}"`);
     } catch (err: any) {
-      console.error("[Booking] 合約回寫失敗（不影響預約結果）:", err.message);
+      console.error("[Booking] 合約回寫失敗（不影響預約結果）:", errorCode(err));
     }
   }
 
@@ -931,7 +912,7 @@ export async function handleConfirmBooking(
                       action: {
                         type: "uri",
                         label: `變更${template.templateType}時間`,
-                        uri: `https://liff.line.me/${template.liffId}?reschedule=${record.insertId}`,
+                        uri: bookingActionUrl(template.liffId, "reschedule", record.insertId),
                       },
                     },
                     {
@@ -941,7 +922,7 @@ export async function handleConfirmBooking(
                       action: {
                         type: "uri",
                         label: `取消${template.templateType}`,
-                        uri: `https://liff.line.me/${template.liffId}?cancel=${record.insertId}`,
+                        uri: bookingActionUrl(template.liffId, "cancel", record.insertId),
                       },
                     },
                   ],
@@ -1005,9 +986,5 @@ export async function handleConfirmBooking(
     console.error("[Booking] LINE notify construction error:", err.message);
   }
 
-  return {
-    success: true,
-    bookingId: record.insertId,
-    ragicRecordId,
-  };
+  return submission;
 }

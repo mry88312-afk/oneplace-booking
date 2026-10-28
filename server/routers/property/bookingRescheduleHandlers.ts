@@ -1,3 +1,4 @@
+import { assertBookingDataset, assertBookingWritesEnabled, bookingActionUrl } from "../../booking/runtime";
 /**
  * P23 — 預約卡片動作：取消 / 變更時間（退租 + 續約共用）。
  *
@@ -35,9 +36,9 @@ function buildActionFooter(liffId: string | null, bookingId: number, templateTyp
     spacing: "sm",
     contents: [
       { type: "button", style: "primary", height: "sm", color: "#4A6741",
-        action: { type: "uri", label: `變更${templateType}時間`, uri: `https://liff.line.me/${liffId}?reschedule=${bookingId}` } },
+        action: { type: "uri", label: `變更${templateType}時間`, uri: bookingActionUrl(liffId, "reschedule", bookingId) } },
       { type: "button", style: "secondary", height: "sm",
-        action: { type: "uri", label: `取消${templateType}`, uri: `https://liff.line.me/${liffId}?cancel=${bookingId}` } },
+        action: { type: "uri", label: `取消${templateType}`, uri: bookingActionUrl(liffId, "cancel", bookingId) } },
     ],
     paddingAll: "16px",
   };
@@ -90,7 +91,8 @@ function buildSimpleCard(opts: {
 }
 
 /** 取得預約 + 對應模版（含 uid 比對）。回傳 { record, template }。 */
-async function loadOwnedBooking(bookingId: number, uid: string) {
+async function loadOwnedBooking(bookingId: number, uid: string, datasetId?: string) {
+  assertBookingDataset(datasetId);
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
 
@@ -115,8 +117,8 @@ async function loadOwnedBooking(bookingId: number, uid: string) {
 }
 
 /** 改期前先取得這筆預約的基本資料（前端跳過驗證直接進選時段用） */
-export async function handleGetBookingForReschedule(input: { bookingId: number; uid: string }) {
-  const { record, template } = await loadOwnedBooking(input.bookingId, input.uid);
+export async function handleGetBookingForReschedule(input: { bookingId: number; uid: string; datasetId?: string }) {
+  const { record, template } = await loadOwnedBooking(input.bookingId, input.uid, input.datasetId);
   return {
     bookingId: record.id,
     projectId: template.projectId,
@@ -131,8 +133,9 @@ export async function handleGetBookingForReschedule(input: { bookingId: number; 
 }
 
 /** 取消預約：硬刪除 Ragic 任務 + 本地標記取消 */
-export async function handleCancelBookingPublic(input: { bookingId: number; uid: string }) {
-  const { db, record, template } = await loadOwnedBooking(input.bookingId, input.uid);
+export async function handleCancelBookingPublic(input: { bookingId: number; uid: string; datasetId?: string }) {
+  assertBookingWritesEnabled();
+  const { db, record, template } = await loadOwnedBooking(input.bookingId, input.uid, input.datasetId);
 
   if (record.status === "cancelled") {
     return { success: true, alreadyCancelled: true };
@@ -195,6 +198,7 @@ export async function handleCancelBookingPublic(input: { bookingId: number; uid:
 
 /** 變更時間：更新 Ragic 任務日期 + 本地紀錄 */
 export async function handleRescheduleBooking(input: {
+  datasetId?: string;
   bookingId: number;
   uid: string;
   date: string;
@@ -203,7 +207,8 @@ export async function handleRescheduleBooking(input: {
   calendarId: string;
   assigneeName: string;
 }) {
-  const { db, record, template } = await loadOwnedBooking(input.bookingId, input.uid);
+  assertBookingWritesEnabled();
+  const { db, record, template } = await loadOwnedBooking(input.bookingId, input.uid, input.datasetId);
 
   if (record.status === "cancelled") {
     throw new TRPCError({ code: "BAD_REQUEST", message: "此預約已取消，無法變更" });

@@ -78,8 +78,8 @@ export async function handleCreateTemplate(input: TemplateCreateInput & { projec
     minLeadDays: input.minLeadDays ?? 0,
     contractAction: input.contractAction || null,
     createdByUserId,
-  });
-  const templateId = result.insertId;
+  }).returning({ id: schema.bookingTemplates.id });
+  const templateId = result.id;
 
   if (input.rules && input.rules.length > 0) {
     for (let i = 0; i < input.rules.length; i++) {
