@@ -439,6 +439,7 @@ export const bookingRouter = router({
   confirmBooking: publicProcedure
     .input(
       z.object({
+        requestId: z.string().max(64).optional(),
         projectId: z.string(),
         uid: z.string().min(1),
         tenantName: z.string(),

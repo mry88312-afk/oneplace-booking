@@ -1,8 +1,11 @@
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
+import { errorCode } from "../../shared/bookingErrors";
 
-let _db: ReturnType<typeof drizzle> | null = null;
+const createDatabase = (pool: mysql.Pool) => drizzle({ client: pool });
+let _db: ReturnType<typeof createDatabase> | null = null;
 let _pool: mysql.Pool | null = null;
+let _rebuilding: Promise<void> | null = null;
 let _lastHealthCheck = 0;
 const HEALTH_CHECK_INTERVAL_MS = 30_000; // 每 30 秒做一次健康檢查
 
@@ -10,6 +13,12 @@ const HEALTH_CHECK_INTERVAL_MS = 30_000; // 每 30 秒做一次健康檢查
  * 重建連線池（當偵測到連線池死亡時呼叫）
  */
 async function rebuildPool(): Promise<void> {
+  if (_rebuilding) return _rebuilding;
+  _rebuilding = rebuildPoolOnce().finally(() => { _rebuilding = null; });
+  return _rebuilding;
+}
+
+async function rebuildPoolOnce(): Promise<void> {
   console.log("[Database] Rebuilding connection pool...");
   try {
     if (_pool) {
@@ -23,8 +32,9 @@ async function rebuildPool(): Promise<void> {
     console.error("[Database] DATABASE_URL not set!");
     return;
   }
+  let candidate: mysql.Pool | null = null;
   try {
-    _pool = mysql.createPool({
+    candidate = mysql.createPool({
       uri: process.env.DATABASE_URL,
       timezone: "+00:00",
       connectionLimit: 20,
@@ -35,10 +45,14 @@ async function rebuildPool(): Promise<void> {
       idleTimeout: 60_000,
       connectTimeout: 15_000,
     });
-    _db = drizzle({ client: _pool }) as any;
+    // createPool is lazy: constructing an object proves no connectivity at all.
+    await candidate.query("SELECT 1");
+    _pool = candidate;
+    _db = createDatabase(candidate);
     console.log("[Database] Connection pool rebuilt successfully");
   } catch (error: any) {
-    console.error("[Database] Failed to rebuild pool - code:", error?.code, "message:", error?.message);
+    console.error("[Database] Failed to rebuild pool - code:", errorCode(error));
+    await candidate?.end().catch(() => {});
     _db = null;
     _pool = null;
   }
@@ -52,15 +66,19 @@ async function checkAndHealPool(): Promise<void> {
   if (now - _lastHealthCheck < HEALTH_CHECK_INTERVAL_MS) return;
   _lastHealthCheck = now;
   if (!_pool) return;
+  let conn: mysql.PoolConnection | undefined;
   try {
-    const conn = await _pool.getConnection();
+    conn = await _pool.getConnection();
     await conn.query("SELECT 1");
-    conn.release();
   } catch (err: any) {
     // errno 9001 = PD server timeout, errno 1040 = too many connections, etc.
-    console.error("[Database] Health check failed - code:", err?.code, "errno:", err?.errno, "message:", err?.message);
+    console.error("[Database] Health check failed - code:", errorCode(err));
     console.warn("[Database] Rebuilding pool due to health check failure...");
+    conn?.release();
+    conn = undefined;
     await rebuildPool();
+  } finally {
+    conn?.release();
   }
 }
 
@@ -106,6 +124,7 @@ export function isDatabaseHealthy(): boolean {
  * Gracefully close the connection pool (call on process shutdown).
  */
 export async function closeDb() {
+  _lastHealthCheck = 0;
   if (_pool) {
     await _pool.end();
     _pool = null;

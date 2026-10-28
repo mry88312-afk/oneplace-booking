@@ -10,7 +10,8 @@
     "build:server": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "build": "npm run build:client && npm run build:server",
     "start": "NODE_ENV=production node dist/index.js",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

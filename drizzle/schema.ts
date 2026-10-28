@@ -122,3 +122,15 @@ export const bookingRecords = mysqlTable(
 );
 export type BookingRecordRecord = typeof bookingRecords.$inferSelect;
 export type InsertBookingRecord = typeof bookingRecords.$inferInsert;
+
+/** Durable operation receipts, independent of booking status and external Calendar writers. */
+export const bookingSubmissionAttempts = mysqlTable("booking_submission_attempts", {
+  requestKey: varchar("request_key", { length: 64 }).primaryKey(),
+  payloadHash: varchar("payload_hash", { length: 64 }).notNull(),
+  state: varchar("state", { length: 32 }).notNull(),
+  ragicRecordId: varchar("ragic_record_id", { length: 64 }),
+  bookingId: int("booking_id"),
+  failureStage: varchar("failure_stage", { length: 32 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+});

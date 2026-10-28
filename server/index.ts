@@ -11,6 +11,7 @@ import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
+import { errorCode } from "../shared/bookingErrors";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,7 +47,7 @@ async function startServer() {
       allowMethodOverride: true,
       onError: ({ error, path }) => {
         if (error.code === "INTERNAL_SERVER_ERROR") {
-          console.error(`[tRPC] Internal error on ${path}:`, error.message);
+          console.error(`[tRPC] Internal error on ${path}:`, errorCode(error));
         }
       },
     }),

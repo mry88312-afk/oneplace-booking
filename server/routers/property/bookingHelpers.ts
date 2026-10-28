@@ -3,6 +3,7 @@
  * Extracted from booking.ts to enable handler module reuse.
  */
 import { google } from "googleapis";
+import { errorCode } from "../../../shared/bookingErrors";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -90,7 +91,7 @@ export async function ragicGet(ragicPath: string, params?: Record<string, string
 
 export async function ragicPost(ragicPath: string, data: Record<string, any>) {
   const url = `${BASE}/${APP}/${ragicPath}?v=3&api=&doFormula=true&doLinkLoad=first&doDefaultValue=true`;
-  console.log(`[Ragic Payload] POST to ${ragicPath}:`, JSON.stringify(data, null, 2));
+  console.log(`[Ragic] Creating task in ${ragicPath}`);
   console.log(`[Ragic Payload] URL params: doFormula=true, doLinkLoad=first`);
   // 寫入用 x-www-form-urlencoded（生產已證實可用：含中文任務名的建立皆 status=200）。
   // P87 曾短暫改 JSON，後由生產 log 確認 form-urlencoded 本來就正常而於 P88 回退。
@@ -105,18 +106,18 @@ export async function ragicPost(ragicPath: string, data: Record<string, any>) {
     body: formBody.toString(),
   });
   const text = await resp.text();
-  console.log(`[API Response] Ragic POST response (status=${resp.status}):`, text);
+  console.log(`[Ragic] Create response HTTP ${resp.status}`);
   if (!resp.ok) {
-    console.error(`[API Response] Ragic POST FAILED: status=${resp.status}, body=${text}`);
-    throw new Error(`Ragic POST error: ${resp.status} - ${text}`);
+    console.error(`[Ragic] Create failed HTTP ${resp.status}`);
+    throw new Error(`Ragic create failed HTTP ${resp.status}`);
   }
   let parsed: any;
   try { parsed = JSON.parse(text); } catch { return { raw: text }; }
   // P87 保留：Ragic 驗證/權限失敗時 HTTP 200 但 body 為 {"status":"INVALID"/"ERROR",...}；
   // 必須視為失敗丟出，才能被上層 catch 到並觸發告警（否則又是無聲失敗）。
   if (parsed?.status === "INVALID" || parsed?.status === "ERROR") {
-    console.error(`[API Response] Ragic POST body ERROR:`, parsed.msg || text);
-    throw new Error(`Ragic POST body error: ${parsed.msg || text}`);
+    console.error("[Ragic] Create rejected by application");
+    throw new Error("Ragic create rejected");
   }
   return parsed;
 }
@@ -124,7 +125,7 @@ export async function ragicPost(ragicPath: string, data: Record<string, any>) {
 /** Ragic PUT（更新現有記錄） */
 export async function ragicPut(ragicPath: string, ragicId: number, data: Record<string, any>) {
   const url = `${BASE}/${APP}/${ragicPath}/${ragicId}?v=3&api=&doFormula=true&doLinkLoad=first&doDefaultValue=true`;
-  console.log(`[Ragic Payload] PUT to ${ragicPath}/${ragicId}:`, JSON.stringify(data, null, 2));
+  console.log(`[Ragic] Updating ${ragicPath}/${ragicId}`);
   // 同 ragicPost：寫入用 form-urlencoded（P88 回退；生產已證實可用）。
   const formBody = new URLSearchParams();
   for (const [k, v] of Object.entries(data)) { formBody.append(k, String(v ?? "")); }
@@ -137,17 +138,15 @@ export async function ragicPut(ragicPath: string, ragicId: number, data: Record<
     body: formBody.toString(),
   });
   const text = await resp.text();
-  console.log(`[API Response] Ragic PUT response (status=${resp.status}):`, text);
+  console.log(`[Ragic] Update response HTTP ${resp.status}`);
   if (!resp.ok) {
-    console.error(`[API Response] Ragic PUT FAILED: status=${resp.status}, body=${text}`);
-    throw new Error(`Ragic PUT error: ${resp.status} - ${text}`);
+    throw new Error(`Ragic update failed HTTP ${resp.status}`);
   }
   let parsed: any;
   try { parsed = JSON.parse(text); } catch { return { raw: text }; }
   // Ragic 驗證/權限失敗時 HTTP 200 但 body 是 {"status":"INVALID"/"ERROR","msg":"..."}
   if (parsed?.status === "INVALID" || parsed?.status === "ERROR") {
-    console.error(`[API Response] Ragic PUT body ERROR:`, parsed.msg || text);
-    throw new Error(`Ragic PUT body error: ${parsed.msg || text}`);
+    throw new Error("Ragic update rejected");
   }
   return parsed;
 }
@@ -393,7 +392,7 @@ export async function ragicUploadFile(
       console.log(`[Ragic Upload] Decoded base64 data URL, type=${contentType}, size=${arrayBuffer.byteLength}`);
     } else {
       // URL：從遠端下載（舊有的 S3 流程，保留向後相容）
-      console.log(`[Ragic Upload] Downloading file from: ${fileUrlOrDataUrl}`);
+      console.log("[Ragic Upload] Downloading attachment");
       const fileResp = await fetch(fileUrlOrDataUrl);
       if (!fileResp.ok) {
         throw new Error(`Failed to download file: ${fileResp.status}`);
@@ -428,12 +427,22 @@ export async function ragicUploadFile(
     
     const text = await resp.text();
     if (!resp.ok) {
-      console.error(`[Ragic Upload] FAILED: status=${resp.status}, body=${text}`);
-      throw new Error(`Ragic upload error: ${resp.status} - ${text}`);
+      console.error(`[Ragic Upload] FAILED: status=${resp.status}`);
+      throw new Error(`Ragic upload error: ${resp.status}`);
     }
-    console.log(`[Ragic Upload] SUCCESS: field=${fieldId}, response=${text.substring(0, 200)}`);
+    const result = JSON.parse(text);
+    // HTTP 200 alone is not a receipt. Ragic documents the uploaded field's filename
+    // in the response; legacy deployments return an explicit SUCCESS acknowledgement.
+    const fileReceipt = result?.[fieldId] ?? result?.data?.[fieldId];
+    if (!result || typeof result !== "object" || Array.isArray(result)
+      || result.status === "ERROR" || result.status === "INVALID"
+      || !(result.status === "SUCCESS" || (typeof fileReceipt === "string" && fileReceipt.includes("@")))) {
+      throw new Error("Ragic attachment was not accepted");
+    }
+    console.log(`[Ragic Upload] Accepted: field=${fieldId}`);
   } catch (err: any) {
-    console.error(`[Ragic Upload] Error uploading file to field ${fieldId}:`, err.message);
+    console.error(`[Ragic Upload] Error uploading file to field ${fieldId}:`, errorCode(err));
+    throw new Error("Ragic attachment upload was not confirmed");
   }
 }
 
@@ -489,7 +498,7 @@ export async function resolveTemplateBundle(
       }
     }
   } catch (err: any) {
-    console.error("[resolveTemplateBundle] DB error:", err?.message);
+    console.error("[resolveTemplateBundle] DB error:", errorCode(err));
   }
 
   // checkout 的正式 DB 暫時不可用時，仍回到已驗證過的 locked 版本，避免預約整站中斷。
