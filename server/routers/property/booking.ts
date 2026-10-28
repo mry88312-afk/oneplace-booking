@@ -1,3 +1,5 @@
+import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled } from "../../booking/runtime";
+import { BOOKING_UNAVAILABLE } from "../../../shared/bookingErrors";
 /**
  * 預約 router
  * - 租客端 publicProcedure（取模版、驗證、查時段、確認預約）
@@ -41,7 +43,7 @@ export const bookingRouter = router({
   /** 列出所有模版 */
   listTemplates: adminProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: BOOKING_UNAVAILABLE });
     return db
       .select()
       .from(schema.bookingTemplates)
@@ -199,7 +201,7 @@ export const bookingRouter = router({
     )
     .query(async ({ input }) => {
       const db = await getDb();
-      if (!db) return [];
+      if (!db) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: BOOKING_UNAVAILABLE });
       const base = db.select().from(schema.bookingRecords);
       if (input.templateId) {
         return base
@@ -216,6 +218,7 @@ export const bookingRouter = router({
   cancelBooking: adminProcedure
     .input(z.object({ id: z.number(), reason: z.string().optional() }))
     .mutation(async ({ input }) => {
+      assertBookingWritesEnabled();
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -337,6 +340,8 @@ export const bookingRouter = router({
         : allRoutingDays;
 
       return {
+        datasetId: bookingDatasetId(),
+        writesEnabled: bookingWritesEnabled(),
         id: template.id,
         projectId: template.projectId,
         name: template.name,
@@ -440,6 +445,7 @@ export const bookingRouter = router({
     .input(
       z.object({
         requestId: z.string().max(64).optional(),
+        datasetId: z.string().max(80).optional(),
         projectId: z.string(),
         uid: z.string().min(1),
         tenantName: z.string(),
@@ -601,18 +607,19 @@ export const bookingRouter = router({
 
   /** 改期前取得預約基本資料（uid 比對） */
   getBookingForReschedule: publicProcedure
-    .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1) }))
+    .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1), datasetId: z.string().max(80).optional() }))
     .query(async ({ input }) => handleGetBookingForReschedule(input)),
 
   /** 取消預約：硬刪除 Ragic 任務 + 標記取消（uid 比對） */
   cancelBookingPublic: publicProcedure
-    .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1) }))
+    .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1), datasetId: z.string().max(80).optional() }))
     .mutation(async ({ input }) => handleCancelBookingPublic(input)),
 
   /** 變更時間：更新 Ragic 任務日期 + 本地紀錄（uid 比對） */
   rescheduleBooking: publicProcedure
     .input(
       z.object({
+        datasetId: z.string().max(80).optional(),
         bookingId: z.number().int(),
         uid: z.string().min(1),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

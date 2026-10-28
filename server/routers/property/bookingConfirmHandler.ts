@@ -1,3 +1,4 @@
+import { assertBookingDataset, assertBookingWritesEnabled, bookingActionUrl } from "../../booking/runtime";
 /**
  * Handler for confirmBooking procedure（Zeabur 拆分版）.
  *
@@ -485,6 +486,7 @@ function buildCheckoutCleaningCarousel() {
 export async function handleConfirmBooking(
   input: {
     requestId?: string;
+    datasetId?: string;
     projectId: string;
     uid: string;
     tenantName: string;
@@ -505,6 +507,8 @@ export async function handleConfirmBooking(
   },
   ctx: any,
 ) {
+  assertBookingWritesEnabled();
+  assertBookingDataset(input.datasetId);
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: BOOKING_UNAVAILABLE });
   if (!input.requestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestId)) {
@@ -908,7 +912,7 @@ export async function handleConfirmBooking(
                       action: {
                         type: "uri",
                         label: `變更${template.templateType}時間`,
-                        uri: `https://liff.line.me/${template.liffId}?reschedule=${record.insertId}`,
+                        uri: bookingActionUrl(template.liffId, "reschedule", record.insertId),
                       },
                     },
                     {
@@ -918,7 +922,7 @@ export async function handleConfirmBooking(
                       action: {
                         type: "uri",
                         label: `取消${template.templateType}`,
-                        uri: `https://liff.line.me/${template.liffId}?cancel=${record.insertId}`,
+                        uri: bookingActionUrl(template.liffId, "cancel", record.insertId),
                       },
                     },
                   ],

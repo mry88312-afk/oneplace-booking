@@ -1,7 +1,7 @@
 /**
  * Supabase (Postgres) 連線 — 僅供「週期詢問」後端使用。
  *
- * 注意：本服務的 DATABASE_URL 是 TiDB（mysql2），與 Supabase 無關。
+ * 注意：此 pool 供既有週期詢問等查詢；預約新庫另用 BOOKING_DATABASE_URL 專用角色。
  * Supabase 走獨立環境變數 SUPABASE_DB_URL（Supabase → Settings → Database
  * → Connection pooling 的 URI，建議用 pooler:6543）。service_role 等級的
  * 連線只存在後端，瀏覽器永遠只打 Zeabur tRPC，金鑰不外洩。

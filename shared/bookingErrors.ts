@@ -18,7 +18,7 @@ export function errorCode(error: unknown): string {
   let current = error;
   for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
     const value = current as { code?: unknown; cause?: unknown };
-    if (typeof value.code === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)) return value.code;
+    if (typeof value.code === "string" && /^(?:[A-Z][A-Z0-9_]{1,63}|[0-9A-Z]{5})$/.test(value.code)) return value.code;
     current = value.cause;
   }
   return "UNCLASSIFIED";
