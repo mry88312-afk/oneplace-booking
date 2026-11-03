@@ -9,6 +9,7 @@
  * needsAction / accepted / tentative / owner 都視為「沒空」。
  */
 import { TRPCError } from "@trpc/server";
+import { assertTemplateAccess, type BookingActionContext } from "../../booking/projectAccess";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq, and } from "drizzle-orm";
@@ -151,7 +152,9 @@ function resolveRuleTimeWindow(
 export async function handleGetAvailableSlots(input: {
   projectId: string;
   date: string;
+  bookingContext?: BookingActionContext;
 }) {
+  await assertTemplateAccess(input.projectId, input.bookingContext);
   // DB 優先 + hardcode fallback
   const bundle = await resolveTemplateBundle(input.projectId);
   if (!bundle) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });
@@ -344,7 +347,9 @@ export async function handleGetAvailableSlots(input: {
 export async function handleGetAvailableSlotsMultiDay(input: {
   projectId: string;
   dates: string[];
+  bookingContext?: BookingActionContext;
 }) {
+  await assertTemplateAccess(input.projectId, input.bookingContext);
   // DB 優先 + hardcode fallback
   const bundle = await resolveTemplateBundle(input.projectId);
   if (!bundle) throw new TRPCError({ code: "NOT_FOUND", message: "預約專案不存在" });

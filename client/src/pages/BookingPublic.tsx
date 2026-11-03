@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import liff from "@line/liff";
 import { bookingRequest, confirmBookingRequest } from "@/lib/bookingRequest";
 import { publicErrorMessage } from "@shared/bookingErrors";
+import { acceptsNewBookings, bookingCardAction, bookingEntryParams, bookingLoginRedirect, CONTRACT_ENTRY_CLOSED } from "@shared/bookingEntry";
 
 import {
   getTaipeiNow, toDateStr,
@@ -67,8 +68,8 @@ export default function BookingPublic() {
 
   // 初始從 URL 讀取 uid（不依賴 LIFF，直接可用）
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
-  const initialParams = useMemo(() => new URLSearchParams(initialSearch), [initialSearch]);
-  const actionDatasetId = initialParams.get('dataset') || undefined;
+  const initialParams = useMemo(() => bookingEntryParams(initialSearch), [initialSearch]);
+  const [actionDatasetId, setActionDatasetId] = useState(() => initialParams.get('dataset') || undefined);
   const uidFromUrl = initialParams.get("uid") || "";
   const debugMode = initialParams.get("debug") === "1";
 
@@ -82,16 +83,13 @@ export default function BookingPublic() {
 
   // P23：卡片動作模式（?reschedule=<bookingId> 變更時間 / ?cancel=<bookingId> 取消）
   const [actionMode, setActionMode] = useState<"none" | "reschedule" | "cancel">(() => {
-    if (initialParams.get("reschedule")) return "reschedule";
-    if (initialParams.get("cancel")) return "cancel";
-    return "none";
+    return bookingCardAction(initialParams)?.action || 'none';
   });
   const [actionBookingId, setActionBookingId] = useState<number | null>(() => {
-    const v = initialParams.get("reschedule") || initialParams.get("cancel");
-    const n = v ? parseInt(v, 10) : NaN;
-    return !isNaN(n) ? n : null;
+    return bookingCardAction(initialParams)?.bookingId || null;
   });
   const isActionMode = actionMode !== "none";
+  const entryClosed = !acceptsNewBookings(projectId) && !isActionMode;
 
   const [view, setView] = useState<PageView>("verify");
   const [uid, setUid] = useState(uidFromUrl);
@@ -144,10 +142,22 @@ export default function BookingPublic() {
   const actionStartedRef = useRef(false);
   const inFlightRef = useRef(false); // 防止重複送出（多次點 Confirm → 重複預約/多張卡片）
 
+  // Card actions use the owned booking's project even when LIFF now opens renewal.
+  const effectiveActionUid = lineUserId || uid;
+  const rescheduleInfoQuery = trpc.booking.getBookingForReschedule.useQuery(
+    { bookingId: actionBookingId!, uid: effectiveActionUid!, datasetId: actionDatasetId },
+    { enabled: isActionMode && !!actionBookingId && !!effectiveActionUid, retry: false },
+  );
+  const bookingContext = isActionMode && rescheduleInfoQuery.data && actionBookingId && effectiveActionUid
+    ? { bookingId: actionBookingId, uid: effectiveActionUid, datasetId: actionDatasetId }
+    : undefined;
+  const bookingProjectId = isActionMode ? rescheduleInfoQuery.data?.projectId || projectId : projectId;
+  // Before ownership resolves, only fetch the active LIFF identity configuration.
+  const templateProjectId = isActionMode && !bookingContext && !acceptsNewBookings(projectId) ? 'renewal' : bookingProjectId;
   const templateQuery = trpc.booking.getPublicTemplate.useQuery(
-    { projectId },
+    { projectId: templateProjectId, bookingContext },
     {
-      enabled: !!projectId,
+      enabled: !!projectId && !entryClosed,
       retry: (failureCount, error: any) => {
         const isUnavailable = error?.message === "SERVICE_UNAVAILABLE" || error?.data?.httpStatus === 503;
         return isUnavailable && failureCount < 3;
@@ -156,21 +166,21 @@ export default function BookingPublic() {
     }
   );
   const slotsQuery = trpc.booking.getAvailableSlots.useQuery(
-    { projectId, date: selectedDate },
-    { enabled: !!selectedDate && view === "slots", retry: false }
+    { projectId: bookingProjectId, date: selectedDate, bookingContext },
+    { enabled: !entryClosed && !!selectedDate && view === "slots" && (!isActionMode || !!bookingContext), retry: false }
   );
   const template = templateQuery.data;
 
   // 指定時段模式：解析 t 參數
   const presetSlotQuery = trpc.booking.resolvePresetSlot.useQuery(
     { projectId, t: presetT },
-    { enabled: isPresetMode && !!projectId, retry: false }
+    { enabled: !entryClosed && !isActionMode && isPresetMode && !!projectId, retry: false }
   );
 
   const [multiDayDates, setMultiDayDates] = useState<string[]>([]);
   const multiDayQuery = trpc.booking.getAvailableSlotsMultiDay.useQuery(
-    { projectId, dates: multiDayDates },
-    { enabled: multiDayDates.length > 0, retry: false, staleTime: 5 * 60 * 1000 }
+    { projectId: bookingProjectId, dates: multiDayDates, bookingContext },
+    { enabled: !entryClosed && multiDayDates.length > 0 && (!isActionMode || !!bookingContext), retry: false, staleTime: 5 * 60 * 1000 }
   );
 
   useEffect(() => {
@@ -378,11 +388,6 @@ export default function BookingPublic() {
   });
 
   // P23：卡片動作（變更時間 / 取消）
-  const effectiveActionUid = lineUserId || uid;
-  const rescheduleInfoQuery = trpc.booking.getBookingForReschedule.useQuery(
-    { bookingId: actionBookingId!, uid: effectiveActionUid!, datasetId: actionDatasetId },
-    { enabled: isActionMode && !!actionBookingId && !!effectiveActionUid, retry: false },
-  );
   const cancelMutation = trpc.booking.cancelBookingPublic.useMutation({
     onSuccess: () => setActionCancelled(true),
     onError: (err) => toast.error(err.message || "取消失敗"),
@@ -396,7 +401,7 @@ export default function BookingPublic() {
   // LIFF init
   useEffect(() => {
     const liffId = templateQuery.data?.liffId;
-    if (!liffId || liffInitRef.current) return;
+    if (entryClosed || !liffId || liffInitRef.current) return;
     liffInitRef.current = true;
     const ATTEMPT_KEY = `liff_login_${liffId}`;
     const hasAttemptedLogin = sessionStorage.getItem(ATTEMPT_KEY) === 'true';
@@ -409,17 +414,14 @@ export default function BookingPublic() {
         // liff.init() 完成後，LIFF 已將 liff.state 還原到正確 URL
         // 此時才能正確讀取 window.location.search 中的 t 參數（針對格式 B：liff.state encoded）
         // 格式 A（直接 ?t=）的 t 已在 mount 時就 set 過了，這裡為了 cover 格式 B 再讀一次
-        const postInitParams = new URLSearchParams(window.location.search);
+        const postInitParams = bookingEntryParams(window.location.search);
+        setActionDatasetId(postInitParams.get('dataset') || actionDatasetId);
         const tParam = postInitParams.get("t") || "";
         console.log("[BOOKING] liff.init done — window.location.search:", window.location.search, "tParam:", tParam, "isLoggedIn:", liff.isLoggedIn(), "isInClient:", liff.isInClient());
         if (/^(\d{8}|\d{12})$/.test(tParam)) setPresetT(tParam);
         // P23：改期/取消參數（格式 B：liff.state 還原後才讀得到）
-        const rs = postInitParams.get("reschedule");
-        const cc = postInitParams.get("cancel");
-        if (rs || cc) {
-          const n = parseInt(rs || cc || "", 10);
-          if (!isNaN(n)) { setActionBookingId(n); setActionMode(rs ? "reschedule" : "cancel"); }
-        }
+        const cardAction = bookingCardAction(postInitParams);
+        if (cardAction) { setActionBookingId(cardAction.bookingId); setActionMode(cardAction.action); }
 
         const isLoggedIn = liff.isLoggedIn();
         const isInClient = liff.isInClient();
@@ -435,7 +437,7 @@ export default function BookingPublic() {
           setLiffError("無法透過 LINE 驗證，請改用其他方式"); setLiffReady(true);
         } else {
           sessionStorage.setItem(ATTEMPT_KEY, 'true');
-          liff.login({ redirectUri: window.location.origin + window.location.pathname });
+          liff.login({ redirectUri: bookingLoginRedirect(window.location.origin, projectId, postInitParams) });
         }
       })
       .catch((err: any) => {
@@ -736,6 +738,7 @@ export default function BookingPublic() {
   }, []);
 
   // Render
+  if (entryClosed) return <BookingErrorScreen title="此續約入口已停止新預約" message={CONTRACT_ENTRY_CLOSED} actionHref="https://liff.line.me/2006833424-znZYKjip" actionLabel="前往線上續約" />;
   if (templateQuery.isLoading) return <BookingLoadingScreen />;
   if (templateQuery.error || !template) return <BookingErrorScreen message={templateQuery.error?.message} />;
 

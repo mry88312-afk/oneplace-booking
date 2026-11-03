@@ -3,6 +3,7 @@
  * Extracted from booking.ts for maintainability.
  */
 import { TRPCError } from "@trpc/server";
+import { assertNewBookingAllowed } from "../../booking/projectAccess";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq, and } from "drizzle-orm";
@@ -88,6 +89,7 @@ export async function handleVerifyTenantUid(input: {
   projectId: string;
   uid: string;
 }) {
+  assertNewBookingAllowed(input.projectId);
   // DB 優先 + hardcode fallback
   const bundle = await resolveTemplateBundle(input.projectId);
   const template = bundle?.template;
@@ -173,6 +175,7 @@ export async function handleVerifyByPhone(input: {
   phone: string;
   uid?: string;
 }) {
+  assertNewBookingAllowed(input.projectId);
   // DB 優先 + hardcode fallback
   const bundle = await resolveTemplateBundle(input.projectId);
   const template = bundle?.template;

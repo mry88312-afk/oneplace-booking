@@ -262,33 +262,17 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       // 發送前即時防呆（rule 卡）：合約已退租(move_out_date)、或同房已有「更晚開始的新合約」
       // （本人續約 or 別人接手）→ 一律不發。涵蓋 recompute 與發送之間才退租/續約的同日空窗，
       // 也擋「沒走線上預約、直接在 Ragic 處理」者。註：Ragic「取消」是公式（過期或退租都觸發），
-      // 不可靠；退租日＋房間後續合約才是可靠訊號。房間鍵：unit_id→房號→合約自成一房（續約單常漏填房號）。
-      // 同一人（tenant_id 或 LINE UID）在別房/別案場有更晚的合約＝換房續約，也算 superseded。
-      // 作廢合約（退租日 ≤ 開始日）不算後續合約。
+      // 不可靠；退租日＋房間後續合約才是可靠訊號。房間鍵：房號→unit_id→合約自成一房。
       if ((row.source ?? "rule") === "rule" && row.contract_no) {
         const chk = await sbQuery<{ moved_out: boolean; superseded: boolean }>(
           `select tc.move_out_date is not null as moved_out,
                   exists (
                     select 1 from contract.tenant_contracts c2
                      where c2.deleted_at is null
-                       and not (c2.move_out_date is not null and c2.move_out_date <= c2.start_date)
-                       and c2.id <> tc.id
-                       and (c2.start_date > tc.start_date
-                            or (c2.start_date = tc.start_date and c2.end_date > tc.end_date))
-                       and (
-                         (c2.property_id is not distinct from tc.property_id
-                          and coalesce(c2.unit_id::text, nullif(c2.legacy_snapshot->>'1014736',''), 'c:'||c2.contract_no)
-                            = coalesce(tc.unit_id::text, nullif(tc.legacy_snapshot->>'1014736',''), 'c:'||tc.contract_no))
-                         or exists (
-                           select 1
-                             from contract.tenant_contract_parties pa
-                             join contract.tenants t on t.id = pa.tenant_id
-                             join contract.tenant_contract_parties pa2 on pa2.tenant_contract_id = c2.id
-                             join contract.tenants t2 on t2.id = pa2.tenant_id
-                            where pa.tenant_contract_id = tc.id
-                              and (t2.id = t.id or (t.line_uid not in ('', '.') and t2.line_uid = t.line_uid))
-                         )
-                       )
+                       and c2.property_id is not distinct from tc.property_id
+                       and coalesce(nullif(c2.legacy_snapshot->>'1014736',''), c2.unit_id::text, 'c:'||c2.contract_no)
+                         = coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no)
+                       and c2.start_date > tc.start_date
                   ) as superseded
              from contract.tenant_contracts tc
             where tc.contract_no=$1
@@ -529,25 +513,21 @@ const SCHEDULE_COLS =
  *   · 房內最新合約仍有效/未到期（本人續約 or 別人接手）→ 不抓（房有合約）。
  *   · 房內最新合約已到期 + 退租日(move_out_date)為空 + 無更新合約 → 這人還沒續約也沒退租 → 抓。
  *   · 退租日有值 → 已退租（退租時一定回寫退租日，可靠）→ 不抓。
- *   · 同一人（tenant_id 或 LINE UID）另有更晚開始的合約 → 已換房/換案場續約 → 不抓。
- * 之後再用預約表排除「已線上預約續約/退租」者（如游佩恩/林芬郃）。
- * 房間鍵：unit_id → 無 unit_id 用房號(1014736) → 再無則以合約自成一房（整租/無房號 fallback）。
- *   unit_id 優先：同房的續約單常漏填房號，以房號為先會把同一間房拆成兩組而誤報。
- * 作廢合約（退租日 ≤ 開始日＝入住前就取消）不算數，否則會蓋掉房內真正的現行合約。
+ * 之後再用 TiDB 預約表排除「已線上預約續約/退租」者（如游佩恩/林芬郃）。
+ * 房間鍵：房號(1014736) → 無房號用 unit_id → 再無則以合約自成一房（整租/無房號 fallback）。
  * 回溯下限 90 天：避免撈到早已離開、只是沒補退租日的陳年合約。
  */
 const RENEWAL_DUE_LOOKBACK_DAYS = 90;
 async function scanRenewalDueList(thresholdDays: number) {
   const pool = await sbQuery<any>(
     `with room_latest as (
-       select distinct on (tc.property_id, coalesce(tc.unit_id::text, nullif(tc.legacy_snapshot->>'1014736',''), 'c:'||tc.contract_no))
-              tc.id, tc.contract_no, tc.start_date, tc.end_date, tc.move_out_date, tc.status,
+       select distinct on (tc.property_id, coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no))
+              tc.id, tc.contract_no, tc.end_date, tc.move_out_date, tc.status,
               tc.property_id, tc.unit_id, tc.legacy_snapshot->>'1014736' as room_label
          from contract.tenant_contracts tc
         where tc.deleted_at is null
-          and not (tc.move_out_date is not null and tc.move_out_date <= tc.start_date)
         order by tc.property_id,
-                 coalesce(tc.unit_id::text, nullif(tc.legacy_snapshot->>'1014736',''), 'c:'||tc.contract_no),
+                 coalesce(nullif(tc.legacy_snapshot->>'1014736',''), tc.unit_id::text, 'c:'||tc.contract_no),
                  tc.start_date desc nulls last, tc.end_date desc nulls last
      )
      select t.line_uid, t.primary_name, t.primary_phone,
@@ -566,17 +546,6 @@ async function scanRenewalDueList(thresholdDays: number) {
         and rl.end_date is not null
         and rl.end_date <= current_date + $1::int
         and rl.end_date >= current_date - $2::int
-        and not exists (
-          select 1
-            from contract.tenant_contract_parties pa2
-            join contract.tenants t2 on t2.id = pa2.tenant_id
-            join contract.tenant_contracts c2 on c2.id = pa2.tenant_contract_id
-           where c2.deleted_at is null
-             and not (c2.move_out_date is not null and c2.move_out_date <= c2.start_date)
-             and c2.id <> rl.id
-             and c2.start_date > rl.start_date
-             and (t2.id = t.id or (t.line_uid not in ('', '.') and t2.line_uid = t.line_uid))
-        )
       order by p.ownership_region nulls last, rl.end_date`,
     [thresholdDays, RENEWAL_DUE_LOOKBACK_DAYS],
   );
