@@ -1,5 +1,6 @@
 import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled } from "../../booking/runtime";
 import { BOOKING_UNAVAILABLE } from "../../../shared/bookingErrors";
+import { assertNewBookingAllowed, assertTemplateAccess } from "../../booking/projectAccess";
 /**
  * 預約 router
  * - 租客端 publicProcedure（取模版、驗證、查時段、確認預約）
@@ -36,6 +37,12 @@ import {
   handleCancelBookingPublic,
   handleRescheduleBooking,
 } from "./bookingRescheduleHandlers";
+
+const bookingActionContextSchema = z.object({
+  bookingId: z.number().int().positive(),
+  uid: z.string().min(1),
+  datasetId: z.string().max(80).optional(),
+});
 
 export const bookingRouter = router({
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
@@ -316,8 +323,9 @@ export const bookingRouter = router({
 
   /** 取得預約模版公開資訊（租客端用） */
   getPublicTemplate: publicProcedure
-    .input(z.object({ projectId: z.string() }))
+    .input(z.object({ projectId: z.string(), bookingContext: bookingActionContextSchema.optional() }))
     .query(async ({ input }) => {
+      await assertTemplateAccess(input.projectId, input.bookingContext);
       // DB 優先 + hardcode fallback（退租/續約 DB 掛了仍可服務）
       const bundle = await resolveTemplateBundle(input.projectId);
       if (!bundle)
@@ -397,6 +405,7 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      assertNewBookingAllowed(input.projectId);
       const { ragicPost, RAGIC_API_KEY_VALUE } = await import("./bookingHelpers");
       if (!RAGIC_API_KEY_VALUE) {
         throw new TRPCError({
@@ -434,6 +443,7 @@ export const bookingRouter = router({
       z.object({
         projectId: z.string(),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        bookingContext: bookingActionContextSchema.optional(),
       }),
     )
     .query(async ({ input }) => {
@@ -476,6 +486,7 @@ export const bookingRouter = router({
       z.object({
         projectId: z.string(),
         dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(90),
+        bookingContext: bookingActionContextSchema.optional(),
       }),
     )
     .query(async ({ input }) => {
@@ -491,6 +502,7 @@ export const bookingRouter = router({
       }),
     )
     .query(async ({ input }) => {
+      assertNewBookingAllowed(input.projectId);
       let year: number, month: number, day: number, hour: number, minute: number;
       if (input.t.length === 12) {
         year = parseInt(input.t.slice(0, 4));

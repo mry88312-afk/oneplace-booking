@@ -157,7 +157,9 @@ export function BookingLoadingScreen() {
   );
 }
 
-export function BookingErrorScreen({ message }: { message?: string }) {
+export function BookingErrorScreen({ message, title, actionHref, actionLabel }: {
+  message?: string; title?: string; actionHref?: string; actionLabel?: string;
+}) {
   return (
     <div className="min-h-screen bg-[#f8f7f4] flex flex-col">
       <div className="bg-white border-b border-[#e8e5df] px-4 py-3 flex items-center justify-center">
@@ -166,8 +168,9 @@ export function BookingErrorScreen({ message }: { message?: string }) {
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="text-center max-w-sm">
           <AlertCircle className="h-12 w-12 text-red-400 mx-auto mb-4" />
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">無法載入預約頁面</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">{title || '無法載入預約頁面'}</h2>
           <p className="text-sm text-gray-500">{message || "預約專案不存在或已停用"}</p>
+          {actionHref && <Button asChild className="mt-4"><a href={actionHref}>{actionLabel}</a></Button>}
         </div>
       </div>
     </div>

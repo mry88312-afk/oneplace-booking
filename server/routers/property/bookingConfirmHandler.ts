@@ -1,4 +1,5 @@
 import { assertBookingDataset, assertBookingWritesEnabled, bookingActionUrl } from "../../booking/runtime";
+import { assertNewBookingAllowed } from "../../booking/projectAccess";
 /**
  * Handler for confirmBooking procedure（Zeabur 拆分版）.
  *
@@ -507,6 +508,7 @@ export async function handleConfirmBooking(
   },
   ctx: any,
 ) {
+  assertNewBookingAllowed(input.projectId);
   assertBookingWritesEnabled();
   assertBookingDataset(input.datasetId);
   const db = await getDb();
