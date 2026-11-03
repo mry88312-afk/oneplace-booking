@@ -1,4 +1,4 @@
-import { assertBookingDataset, assertBookingWritesEnabled, bookingActionUrl } from "../../booking/runtime";
+import { assertBookingWritesEnabled, bookingActionUrl } from "../../booking/runtime";
 /**
  * P23 — 預約卡片動作：取消 / 變更時間（退租 + 續約共用）。
  *
@@ -9,7 +9,7 @@ import { assertBookingDataset, assertBookingWritesEnabled, bookingActionUrl } fr
  * 安全：所有動作都用 LINE uid 比對該筆預約的 tenantUid，避免猜 bookingId 亂改/亂刪。
  */
 import { TRPCError } from "@trpc/server";
-import { getDb } from "../../db";
+import { loadOwnedBooking } from "../../booking/ownedBooking";
 import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPut, ragicDelete, ragicExecuteButton } from "./bookingHelpers";
@@ -88,32 +88,6 @@ function buildSimpleCard(opts: {
   };
   if (opts.footer) bubble.footer = opts.footer;
   return { type: "flex" as const, altText: opts.altText, contents: bubble };
-}
-
-/** 取得預約 + 對應模版（含 uid 比對）。回傳 { record, template }。 */
-async function loadOwnedBooking(bookingId: number, uid: string, datasetId?: string) {
-  assertBookingDataset(datasetId);
-  const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-
-  const [record] = await db
-    .select()
-    .from(schema.bookingRecords)
-    .where(eq(schema.bookingRecords.id, bookingId));
-  if (!record) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這筆預約" });
-
-  // 安全：uid 必須與該筆預約的 tenantUid 相符
-  if (!uid || !record.tenantUid || record.tenantUid !== uid) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "無權限操作這筆預約" });
-  }
-
-  const [template] = await db
-    .select()
-    .from(schema.bookingTemplates)
-    .where(eq(schema.bookingTemplates.id, record.templateId));
-  if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "預約模版不存在" });
-
-  return { db, record, template };
 }
 
 /** 改期前先取得這筆預約的基本資料（前端跳過驗證直接進選時段用） */
