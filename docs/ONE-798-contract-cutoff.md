@@ -24,7 +24,13 @@
 
 ## 發布及回復
 
-主線照最新main開PR整合。正式服務仍是PR8，比main少一個其他工作的outreachHandlers改動；本次發布組合維持正式版outreachHandlers，僅加入已驗證的入口修正。發布branch從最新main建立後套此修正，並將該檔保持c24eb0e內容；此差異只供發布，不合回main、不回滾正式已啟用功能。
+最終批准更新：使用者明確同意「一併部署 main（含 PR #9）」。因此正式發布包含本次PR11及先前已合併的PR9續約到期名單修正；不是只部署隔離候選。先前`codex/ONE-798-contract-release`／`ee7553bf588d305b179f82c18cd9e29e868083df`的隔離發布方案作廢，**勿復原或以它覆蓋正式main**。分支保留作證據，未合併其中的outreachHandlers差異。
+
+實際發布：main `e68ad3e00a346435d1bbdc9595ecec1ed9071b47`／PR11，Zeabur deployment `6ae9df97fc2d92ff63099bac`；管理頁已讀回main/PR11「運作中」。原GitHub/main來源未改、無環境變數或DB變更。前一次未批准包含PR9的main建置已在切流前取消；本次依新增批准重新發布。
+
+正式驗證已通過：普通contract頁顯示停止新預約；無本人預約脈絡的template、單/多日時段、preset均403。以刻意錯誤dataset做安全confirm探測亦403（舊版會在dataset檢查拒絕，避免測試誤建單）。ID5–8逐筆本人GET、模板60分鐘、改期時段成功，錯UID全部403，狀態仍confirmed。`renewal`完整一週59個時段仍謝依蒨90分鐘。正式取消/改期寫入未執行，功能動作用合成handler及UI驗證，不冒充自然租客實機驗收。
+
+正式畫面`.cache/contract-closed-production.jpg`；API回讀摘要`.cache/contract-live-evidence.json`。發布前後bookings／attempts／全設定MD5皆與本文件基線一致，4筆contract完整保留。
 
 發布後驗證：普通contract畫面無預約操作；新template/slots/preset/confirm契約被拒；4筆既有預約本人可唯讀取回與查改期時段；renewal整週時段照常、正式既有預約/回執/設定MD5不變。正式不執行取消或改期測試，功能動作用合成handler/畫面證據驗證。實際部署commit、deployment ID與畫面證據補於ONE-798留言。
 
