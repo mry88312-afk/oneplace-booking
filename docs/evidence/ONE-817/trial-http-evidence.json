@@ -1,0 +1,33 @@
+{
+  "checkedAt": "2026-11-05T12:18:24.879Z",
+  "comparisons": [
+    {
+      "projectId": "renewal",
+      "templateMatches": true,
+      "sevenDayAvailabilityMatches": true,
+      "oldWritesEnabled": true
+    },
+    {
+      "projectId": "checkout",
+      "templateMatches": true,
+      "sevenDayAvailabilityMatches": true,
+      "oldWritesEnabled": true
+    }
+  ],
+  "blocked": [
+    "booking.confirmBooking",
+    "booking.cancelBookingPublic",
+    "booking.rescheduleBooking",
+    "booking.verifyTenantUid",
+    "booking.verifyByPhone",
+    "booking.registerTenantByPhone",
+    "booking.writeRenewalVirtualAccount",
+    "booking.submitRenewalRemittance",
+    "booking.completeRenewalRemittance",
+    "/api/outreach/run",
+    "/api/outreach/test-send",
+    "/api/line/inbound",
+    "/f/trial?r=ok"
+  ],
+  "browserExternalCallsBlockedByCsp": true
+}
