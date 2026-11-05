@@ -1,4 +1,5 @@
 import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled } from "../../booking/runtime";
+import { isMigrationTrial } from '../../booking/migrationTrial';
 import { BOOKING_UNAVAILABLE } from "../../../shared/bookingErrors";
 import { assertNewBookingAllowed, assertTemplateAccess } from "../../booking/projectAccess";
 /**
@@ -371,6 +372,7 @@ export const bookingRouter = router({
         : allRoutingDays;
 
       return {
+        migrationTrial: isMigrationTrial(),
         datasetId: bookingDatasetId(),
         writesEnabled: bookingWritesEnabled(),
         id: template.id,
@@ -381,7 +383,7 @@ export const bookingRouter = router({
         bookableDaysAhead: template.bookableDaysAhead,
         dailyStartTime: template.dailyStartTime,
         dailyEndTime: template.dailyEndTime,
-        liffId: template.liffId || null,
+        liffId: isMigrationTrial() ? null : template.liffId || null,
         instructionEnabled: template.instructionEnabled,
         instructionText: template.instructionText || null,
         minLeadDays: template.minLeadDays ?? 0,

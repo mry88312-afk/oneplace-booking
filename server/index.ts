@@ -12,13 +12,16 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
 import { errorCode } from "../shared/bookingErrors";
+import { assertTrialConfiguration, isMigrationTrial, migrationTrialMiddleware } from './booking/migrationTrial';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  assertTrialConfiguration();
   const app = express();
   const server = createServer(app);
+  app.use(migrationTrialMiddleware);
 
   // 壓縮 API 回應
   app.use(compression());
@@ -35,7 +38,7 @@ async function startServer() {
 
   // 健康檢查（Zeabur 用）
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, service: "oneplace-booking", ts: Date.now() });
+    res.json({ ok: true, service: "oneplace-booking", migrationTrial: isMigrationTrial(), ts: Date.now() });
   });
 
   // tRPC

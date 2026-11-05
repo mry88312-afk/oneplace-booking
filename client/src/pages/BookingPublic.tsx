@@ -401,7 +401,7 @@ export default function BookingPublic() {
   // LIFF init
   useEffect(() => {
     const liffId = templateQuery.data?.liffId;
-    if (entryClosed || !liffId || liffInitRef.current) return;
+    if (templateQuery.data?.migrationTrial || entryClosed || !liffId || liffInitRef.current) return;
     liffInitRef.current = true;
     const ATTEMPT_KEY = `liff_login_${liffId}`;
     const hasAttemptedLogin = sessionStorage.getItem(ATTEMPT_KEY) === 'true';
@@ -448,6 +448,7 @@ export default function BookingPublic() {
 
   // Auto-verify
   useEffect(() => {
+    if (templateQuery.data?.migrationTrial) return;
     const hasLiffId = !!templateQuery.data?.liffId;
     const canVerify = hasLiffId ? liffReady : true;
     const effectiveUid = lineUserId || uidFromUrl;
@@ -742,8 +743,13 @@ export default function BookingPublic() {
   if (templateQuery.isLoading) return <BookingLoadingScreen />;
   if (templateQuery.error || !template) return <BookingErrorScreen message={templateQuery.error?.message} />;
 
+  // Trial never enters tenant verification, remittance, cancel or booking forms.
+  if (template.migrationTrial && !["verify", "calendar", "slots"].includes(view)) {
+    return <BookingErrorScreen message="搬遷測試環境僅供檢視，正式服務仍由原站提供。" />;
+  }
+
   // P23 卡片動作模式：載入中 / 權限錯誤 / 取消確認
-  if (isActionMode) {
+  if (isActionMode && !template.migrationTrial) {
     if (rescheduleInfoQuery.isError) return <BookingErrorScreen message={rescheduleInfoQuery.error?.message || "無法載入這筆預約"} />;
     if (view === "verify") return <BookingLoadingScreen />;
   }

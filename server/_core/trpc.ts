@@ -2,6 +2,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 import { publicErrorMessage } from "../../shared/bookingErrors";
+import { assertTrialProcedure } from '../booking/migrationTrial';
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -13,7 +14,11 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 // 公開預約服務的 procedures（租客端，不需 auth）
-export const publicProcedure = t.procedure;
+const trialProcedure = t.procedure.use(({ path, type, next }) => {
+  assertTrialProcedure(path, type);
+  return next();
+});
+export const publicProcedure = trialProcedure;
 
 /**
  * 後台 admin middleware：比對請求 header 的密碼與環境變數 ADMIN_PASSWORD。
@@ -35,4 +40,4 @@ const requireAdmin = t.middleware(({ ctx, next }) => {
 });
 
 /** 後台專用 procedure，需帶正確的 x-admin-password */
-export const adminProcedure = t.procedure.use(requireAdmin);
+export const adminProcedure = trialProcedure.use(requireAdmin);

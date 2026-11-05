@@ -12,6 +12,7 @@ import { eq, and } from "drizzle-orm";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { getLockedBundle, type LockedBundle } from "../../config/lockedTemplates";
+import { isMigrationTrial } from '../../booking/migrationTrial';
 
 const __filename_local = fileURLToPath(import.meta.url);
 const __dirname_local = path.dirname(__filename_local);
@@ -65,7 +66,7 @@ export function getCalendarClient() {
     credentials,
     scopes: [
       "https://www.googleapis.com/auth/calendar.readonly",
-      "https://www.googleapis.com/auth/calendar.events",
+      ...(isMigrationTrial() ? [] : ["https://www.googleapis.com/auth/calendar.events"]),
     ],
   });
   return google.calendar({ version: "v3", auth });

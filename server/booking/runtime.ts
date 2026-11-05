@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { BOOKING_UNAVAILABLE } from '../../shared/bookingErrors';
+import { isMigrationTrial } from './migrationTrial';
 
 export const LEGACY_BOOKING = '這是舊資料庫的預約連結，請聯繫小幫手依 Ragic 紀錄協助取消或改期。';
 
@@ -9,7 +10,7 @@ export function bookingDatasetId(): string | null {
 }
 
 export function bookingWritesEnabled() {
-  return process.env.BOOKING_WRITES_ENABLED === 'true' && bookingDatasetId() !== null;
+  return !isMigrationTrial() && process.env.BOOKING_WRITES_ENABLED === 'true' && bookingDatasetId() !== null;
 }
 
 export function assertBookingWritesEnabled() {
