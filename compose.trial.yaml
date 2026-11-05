@@ -1,0 +1,27 @@
+name: oneplace-booking-trial
+services:
+  booking:
+    build: .
+    image: oneplace-booking-trial:${TRIAL_REVISION:?set TRIAL_REVISION}
+    restart: unless-stopped
+    env_file: trial.env
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      BOOKING_MIGRATION_TRIAL: 'true'
+      BOOKING_WRITES_ENABLED: 'false'
+    ports:
+      - '127.0.0.1::3000'
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/healthz').then(async r=>{const j=await r.json();process.exit(r.ok&&j.migrationTrial===true?0:1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4

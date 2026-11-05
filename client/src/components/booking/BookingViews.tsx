@@ -23,6 +23,14 @@ import { linkifyText } from "@/lib/linkify";
 
 // ─── Verify View ─────────────────────────────────────────────────────────────
 
+function TrialNotice({ children }: React.PropsWithChildren) {
+  return <div className="text-center rounded-xl bg-amber-50 p-4 m-4" role="status">
+    <p className="font-semibold">搬遷測試環境</p>
+    <p className="text-sm my-3">僅供檢視，不接受預約、不更新資料、不發送通知。正式服務仍由原站提供。</p>
+    {children}
+  </div>;
+}
+
 interface VerifyViewProps {
   template: any;
   liffReady: boolean;
@@ -64,7 +72,13 @@ export function VerifyView({
             <LiffFailedAutoRedirect error={liffError} onRedirect={() => setView("phone")} />
           )}
 
-          {!uidFromUrl && !lineUserId && !template?.liffId && (
+          {template.migrationTrial && (
+            <TrialNotice>
+              <Button onClick={() => setView("calendar")}>檢視可預約日期</Button>
+            </TrialNotice>
+          )}
+
+          {!template.migrationTrial && !uidFromUrl && !lineUserId && !template?.liffId && (
             <div className="flex flex-col items-center py-8">
               <Phone className="h-8 w-8 text-[#6B8E6B] mb-4" />
               <p className="text-sm text-gray-600 text-center mb-4">請輸入留存於一方的電話號碼進行驗證</p>
@@ -265,6 +279,7 @@ export function CalendarViewPage({
 }: CalendarViewPageProps) {
   return (
     <BookingContainer>
+      {template.migrationTrial && <TrialNotice />}
       <div className="border-b border-gray-100 px-6 py-5">
         <h1 className="text-lg font-bold text-gray-900">{template.name}</h1>
         <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
@@ -321,6 +336,7 @@ export function SlotsView({
 
   return (
     <BookingContainer>
+      {template.migrationTrial && <TrialNotice />}
       <div className="px-6 py-5">
         <button type="button" className="w-10 h-10 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors mb-4"
           onClick={() => { setView("calendar"); setSelectedSlot(null); }}>
@@ -362,9 +378,9 @@ export function SlotsView({
                     {formatTime(slot.startTime)}
                   </button>
                   {isSelected && (
-                    <button type="button" disabled={isBooking}
+                    <button type="button" disabled={isBooking || template.migrationTrial}
                       className="px-6 py-4 rounded-lg bg-[#6B8E6B] text-white font-bold text-base transition-all hover:bg-[#5A7A5A] disabled:opacity-60 disabled:cursor-not-allowed"
-                      style={{ animation: "fadeInUp 0.2s ease-out" }} onClick={onConfirmSlot}>{isBooking ? "處理中…" : "Confirm"}</button>
+                      style={{ animation: "fadeInUp 0.2s ease-out" }} onClick={onConfirmSlot}>{template.migrationTrial ? "測試環境不可預約" : isBooking ? "處理中…" : "Confirm"}</button>
                   )}
                 </div>
               );

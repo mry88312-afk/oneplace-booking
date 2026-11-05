@@ -1,0 +1,21 @@
+{
+  "checkedAt": "2026-11-05T12:20:43.149Z",
+  "origin": "IAP tunnel to dev-vm",
+  "deployedCommit": "9c2da5b3ca614f711d10b2e26f5ef56964ebfd0c",
+  "renewal": {
+    "entry": true,
+    "date": "2026-11-11",
+    "slot": "13:00",
+    "duration": 90,
+    "submitEnabled": false
+  },
+  "checkout": {
+    "entry": true,
+    "date": "2026-11-11",
+    "slot": "13:00",
+    "duration": 60,
+    "submitEnabled": false
+  },
+  "tenantLoginPerformed": false,
+  "realBookingSubmitted": false
+}

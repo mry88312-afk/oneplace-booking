@@ -1,0 +1,3 @@
+{"image":"oneplace-booking-trial:9c2da5b3ca614f711d10b2e26f5ef56964ebfd0c","imageId":"sha256:21bfd28d36cd0bc848303712e1f2335b3dfb594ce045e1aab126a8d5d13a6141","health":"healthy","user":"node","readOnlyRoot":true,"memory":1073741824,"nanoCpus":1000000000,"pids":128,"capDrop":["ALL"],"securityOpt":["no-new-privileges:true"],"ports":{"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}]}}
+{"trial":"true","writes":"false","unexpectedCredentialKeys":[]}
+trial.env permission=600 owner=root

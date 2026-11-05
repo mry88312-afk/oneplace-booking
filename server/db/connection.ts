@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Pool, type ClientBase } from "pg";
 import { errorCode } from "../../shared/bookingErrors";
+import { isMigrationTrial } from '../booking/migrationTrial';
 
 const createDatabase = (client: Pool) => drizzle({ client });
 let database: ReturnType<typeof createDatabase> | null = null;
@@ -12,12 +13,25 @@ let lastHealthCheck = 0;
 export function createBookingPool(connectionString: string) {
   const url = new URL(connectionString);
   if (!['postgres:', 'postgresql:'].includes(url.protocol)) throw new Error('Booking requires PostgreSQL');
+  if (isMigrationTrial() && url.port === '6543') throw new Error('Trial requires a session connection, not transaction pooling');
   for (const key of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert']) url.searchParams.delete(key);
+  // URL options take precedence in pg: remove them before forcing read-only sessions.
+  if (isMigrationTrial()) url.searchParams.delete('options');
   return new Pool({
     connectionString: url.toString(),
     ssl: { rejectUnauthorized: true, ...(process.env.BOOKING_DATABASE_CA ? { ca: process.env.BOOKING_DATABASE_CA.replace(/\\n/g, '\n') } : {}) },
     max: 5, connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
-    query_timeout: 20_000, application_name: 'oneplace-booking',
+    query_timeout: 20_000, application_name: isMigrationTrial() ? 'oneplace-booking-trial' : 'oneplace-booking',
+    ...(isMigrationTrial() ? {
+      options: '-c default_transaction_read_only=on',
+      // Supabase's pooler may ignore startup options. Await verification BEFORE
+      // lending this connection; never alter the database role or global defaults.
+      onConnect: async (client: ClientBase) => {
+        await client.query('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY');
+        const result = await client.query('SHOW default_transaction_read_only');
+        if (result.rows[0]?.default_transaction_read_only !== 'on') throw new Error('Trial database connection is not read-only');
+      },
+    } : {}),
   });
 }
 
