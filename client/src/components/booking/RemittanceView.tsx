@@ -5,12 +5,12 @@
  * 而是直接呼叫既有的 tenant-form-liff 服務 API（固定 IP 已白名單、env/VA 邏輯只存在那台）。
  *
  * 續約版簡化：姓名/電話直接顯示既有資料、不收身分證；email/職業選填。
- * 子步驟：form（顯示姓名+電話，選填 email/職業 → 發OTP）→ otp（驗證取VA）→ done（顯示VA）
+ * 子步驟：form → otp → 已收件／啟用中 → ready 後繼續預約。
  *
  * 端點：
  *   deposit  POST /api/send-otp   { phone } → { success, isForeignPhone?, devMode? }
- *   deposit  POST /api/verify-otp { phone, otp } → { success, virtualAccount }
- *   booking  trpc writeRenewalVirtualAccount { uid?, phone, virtualAccount, email?, job? } → 寫回 Ragic（不需 idNumber）
+ *   deposit  POST /api/verify-otp → verifyToken；booking 後端用既有租客資料送件。
+ *   booking  submit/get/completeRenewalRemittance → 持久收件／查詢／ready 後存個資。
  */
 import React, { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2, Wallet, ShieldCheck } from "lucide-react";
 import { BookingContainer } from "./utils";
+import { createRemittanceFlow } from "@/lib/remittanceFlow";
 
 // 你現有的 tenant-form-liff（匯訂）服務公開網址；機密邏輯都在這台。
 // 可用 VITE_REMITTANCE_API_BASE build 變數覆蓋，否則用下方常數。
@@ -59,7 +60,7 @@ interface RemittanceViewProps {
 
 export function RemittanceView({ name, phone, existingEmail = "", existingJob = "", uid, onComplete }: RemittanceViewProps) {
   const normalizedPhone = (phone || "").replace(/\D/g, "");
-  const [sub, setSub] = useState<"form" | "otp">("form");
+  const [sub, setSub] = useState<"form" | "otp" | "processing">("form");
 
   const [job, setJob] = useState(existingJob);
   useEffect(() => { setJob(existingJob); }, [existingJob]);
@@ -68,7 +69,26 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
   const [emailVal, setEmailVal] = useState(existingEmail);
   useEffect(() => { setNameVal(name); }, [name]);
   useEffect(() => { setEmailVal(existingEmail); }, [existingEmail]);
-  const writeVA = trpc.booking.writeRenewalVirtualAccount.useMutation();
+  const submitRemittance = trpc.booking.submitRenewalRemittance.useMutation();
+  const completeRemittance = trpc.booking.completeRenewalRemittance.useMutation();
+  const statusRemittance = trpc.booking.getRenewalRemittance.useMutation();
+  const [progress, setProgress] = useState('正在確認手機驗證與帳號處理進度…');
+  const [needsReview, setNeedsReview] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
+  const completed = useRef(false);
+  const flowRef = useRef<ReturnType<typeof createRemittanceFlow> | null>(null);
+  if (!flowRef.current) {
+    flowRef.current = createRemittanceFlow({
+      getItem: key => window.sessionStorage.getItem(key),
+      setItem: (key, value) => window.sessionStorage.setItem(key, value),
+    }, `${uid || 'phone'}:${normalizedPhone}`, {
+      verify: otp => postJson('/verify-otp', { phone: normalizedPhone, otp }),
+      submit: verifyToken => submitRemittance.mutateAsync({ phone: normalizedPhone, uid: uid || undefined, verifyToken }),
+      status: receipt => statusRemittance.mutateAsync({ ...receipt, phone: normalizedPhone }),
+      complete: (receipt, profile) => completeRemittance.mutateAsync({ ...receipt, ...profile, phone: normalizedPhone, uid: uid || undefined }),
+    });
+  }
 
   const [isForeign, setIsForeign] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(""));
@@ -163,38 +183,66 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
   };
 
   const handleVerify = async () => {
-    if (otpValue.length < 4) return toast.error("請輸入完整驗證碼");
+    if (verifying || completed.current) return;
+    if (!flowRef.current!.hasSaved() && otpValue.length < 4) return toast.error("請輸入完整驗證碼");
+    if (pollRef.current) clearTimeout(pollRef.current);
     setVerifying(true);
     try {
-      const r = await postJson("/verify-otp", { phone: normalizedPhone, otp: otpValue });
-      if (!r.success || !r.virtualAccount) {
-        toast.error(r.message || "驗證失敗");
-        clearOtp();
-        return;
+      const result = await flowRef.current!.advance(otpValue, { email: emailVal.trim(), job: job.trim() });
+      if (!mounted.current) return;
+      if (result.status === 'done') {
+        if (!completed.current) {
+          completed.current = true;
+          toast.success('付款設定完成，繼續預約時段');
+          onComplete(result.virtualAccount);
+        }
+      } else {
+        setSub('processing');
+        setNeedsReview(result.status === 'needs_review');
+        setProgress(result.status === 'needs_review' ? '帳號資料需要服務人員確認，請聯絡一方客服，無須重新驗證或送件。' : '手機驗證成功，帳號啟用中。完成後會自動繼續預約，無須重新驗證。');
+        if (pollRef.current) clearTimeout(pollRef.current);
+        if (result.status === 'pending') pollRef.current = setTimeout(() => { void resumeRef.current(); }, 10000);
       }
-      const va = r.virtualAccount as string;
-      // 把虛擬帳號（+可選 email/職業）寫回租客主檔；走預約後端，不需 idNumber、不覆蓋姓名
-      try {
-        await writeVA.mutateAsync({
-          uid: uid || undefined,
-          phone: normalizedPhone,
-          virtualAccount: va,
-          email: emailVal.trim() || undefined,
-          job: job.trim() || undefined,
-        });
-      } catch (e: any) {
-        toast.error(e?.message || "帳號寫入失敗，請稍後再試");
-        return;
-      }
-      // 取消「付款設定完成」頁：設定完成後直接進預約時段（虛擬帳號已傳到 LINE）
-      toast.success("付款設定完成，繼續預約時段");
-      onComplete(va);
     } catch (err: any) {
-      toast.error(err?.message || "驗證失敗，請稍後重試");
+      if (!mounted.current) return;
+      if (err?.data?.code === 'UNAUTHORIZED' && flowRef.current!.forgetRejectedVerification()) {
+        setSub('form');
+        clearOtp();
+        toast.error('手機驗證已失效，請重新發送驗證碼');
+        return;
+      }
+      if (flowRef.current!.hasSaved()) {
+        setSub('processing');
+        setProgress(err?.message || '暫時無法查詢進度，請稍後按下方按鈕重試。');
+        setNeedsReview(err?.data?.code === 'CONFLICT' || err?.data?.code === 'FORBIDDEN' || err?.data?.code === 'BAD_REQUEST' || err?.data?.code === 'UNAUTHORIZED');
+      } else toast.error(err?.message || '驗證失敗，請稍後重試');
     } finally {
-      setVerifying(false);
+      if (mounted.current) setVerifying(false);
     }
   };
+  const resumeRef = useRef(handleVerify);
+  resumeRef.current = handleVerify;
+  useEffect(() => {
+    mounted.current = true;
+    if (flowRef.current!.hasSaved()) {
+      setSub('processing');
+      void resumeRef.current();
+    }
+    return () => { mounted.current = false; if (pollRef.current) clearTimeout(pollRef.current); };
+  }, []);
+
+  if (sub === 'processing') return (
+    <BookingContainer>
+      <div className="flex-1 px-6 py-10 max-w-md mx-auto w-full text-center">
+        <ShieldCheck className="h-12 w-12 text-[#6B8E6B] mx-auto mb-4" />
+        <h1 className="text-2xl font-bold text-gray-900 mb-3">{needsReview ? '請聯絡服務人員' : '付款設定處理中'}</h1>
+        <p role="status" className="text-sm text-gray-600 leading-7 mb-6">{progress}</p>
+        {!needsReview && <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full" disabled={verifying} onClick={handleVerify}>
+          {verifying ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />查詢中…</> : '重新查詢進度'}
+        </Button>}
+      </div>
+    </BookingContainer>
+  );
 
   // ─── form 子步驟 ─────────────────────────────────────────────────────────
   if (sub === "form") {

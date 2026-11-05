@@ -14,6 +14,8 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { remittanceOwnerSchema, remittanceReceiptSchema } from "../../../shared/remittance";
+import { renewalRemittanceService } from "../../booking/remittance";
 import {
   handleGetAvailableSlots,
   handleGetAvailableSlotsMultiDay,
@@ -45,6 +47,27 @@ const bookingActionContextSchema = z.object({
 });
 
 export const bookingRouter = router({
+  submitRenewalRemittance: publicProcedure
+    .input(remittanceOwnerSchema.extend({ verifyToken: z.string().regex(/^[a-f0-9]{48}$/) }))
+    .mutation(async ({ input, ctx }) => {
+      ctx.res?.setHeader?.('Cache-Control', 'no-store');
+      assertBookingWritesEnabled();
+      return (await renewalRemittanceService()).submit(input);
+    }),
+  getRenewalRemittance: publicProcedure
+    .input(remittanceReceiptSchema.extend({ phone: z.string().regex(/^\d{8,15}$/) }))
+    // POST keeps the receipt capability out of URLs, browser history and access logs.
+    .mutation(async ({ input, ctx }) => {
+      ctx.res?.setHeader?.('Cache-Control', 'no-store');
+      return (await renewalRemittanceService()).status(input);
+    }),
+  completeRenewalRemittance: publicProcedure
+    .input(remittanceReceiptSchema.extend(remittanceOwnerSchema.shape).extend({ email: z.string().max(200).optional(), job: z.string().max(200).optional() }))
+    .mutation(async ({ input, ctx }) => {
+      ctx.res?.setHeader?.('Cache-Control', 'no-store');
+      assertBookingWritesEnabled();
+      return (await renewalRemittanceService()).complete(input);
+    }),
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
 
   /** 列出所有模版 */
