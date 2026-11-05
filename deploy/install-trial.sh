@@ -6,7 +6,7 @@ target=/srv/oneplace-booking-trial
 upload=/home/mry88/one817-booking-trial-upload
 # The first install must never replace an existing service directory.
 if sudo test -e "$target"; then echo 'Trial directory already exists; inspect before updating'; exit 1; fi
-sudo install -d -m 750 "$target"
+sudo install -d -m 750 -g "$(id -gn)" "$target"
 sudo tar -xf "$upload/source.tar" -C "$target"
 sudo install -m 600 "$upload/trial.env" "$target/trial.env"
 cd "$target"

@@ -36,7 +36,7 @@ export const migrationTrialMiddleware: RequestHandler = (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   // Also blocks the browser's direct remittance/LINE calls, bypassing this server.
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https://d2xsxph8kpxj0f.cloudfront.net/310519663374214772/JMQD8oX855rUNkwEtNAJD2/efang-logo_28ee778f.png; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
   const isTrpc = req.path.toLowerCase().startsWith('/api/trpc/');
   const isRead = req.method === 'GET' || req.method === 'HEAD';
   const isStatic = req.path === '/healthz' || req.path === '/' || req.path.startsWith('/book/')
