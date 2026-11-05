@@ -1,0 +1,22 @@
+{
+  "counters": {
+    "otp": 1,
+    "submissions": 1,
+    "jobs": 1,
+    "polls": 4,
+    "profileWrites": 1,
+    "bookingWrites": 0,
+    "blockedExternal": 0
+  },
+  "jobs": [
+    {
+      "id": "5793d764-e510-4b9c-b901-822475bfc229",
+      "state": "done",
+      "ready": true
+    }
+  ],
+  "profile": {
+    "email": "edited@example.invalid",
+    "job": "合成更新職業"
+  }
+}
