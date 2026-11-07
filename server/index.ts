@@ -34,7 +34,14 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
 
   // 健康檢查（Zeabur 用）
+  let jgbFallback = "unchecked";
+  if (process.env.NODE_ENV === "production") {
+    void import("./rentReminders/source").then(async ({ checkJgbFallback }) => {
+      jgbFallback = await checkJgbFallback() ? "ready" : "unavailable";
+    }).catch(() => { jgbFallback = "unavailable"; });
+  }
   app.get("/healthz", (_req, res) => {
+    res.set("X-JGB-Fallback", jgbFallback);
     res.json({ ok: true, service: "oneplace-booking", ts: Date.now() });
   });
 

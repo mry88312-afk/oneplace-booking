@@ -1,10 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Bill, Identity, buildFlex, decide, inSendWindow, overdueDays, taipeiDate, tenantInboxUrl } from "./domain";
-import { parseRows, parseWorkbook } from "./source";
+import { fetchCurrentBills, parseRows, parseWorkbook } from "./source";
 import ExcelJS from "exceljs";
 import { runRentReminders } from "./service";
 import { relayPushOnce } from "../routers/property/bookingConfirmHandler";
+
+test("舊站已收到匯出但回應不明，不向另一站重送", async t => {
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string) => {
+    const url = new URL(input);
+    calls.push(url.hostname + url.pathname);
+    if (url.pathname === "/openapi.json") {
+      return Response.json({ paths: { "/api/export-bills": { post: {} }, "/api/check-status": { get: {} } } });
+    }
+    return new Response(null, { status: 504 });
+  });
+  await assert.rejects(fetchCurrentBills(), /HTTP 504/);
+  assert.deepEqual(calls, ["jgbcontractkehsin.zeabur.app/openapi.json", "jgbcontractkehsin.zeabur.app/api/export-bills"]);
+});
 
 const bill: Bill = {
   id: "123", contractId: "456", name: "2026/08-帳單", payer: "公司付款人", room: "測試 A301",
