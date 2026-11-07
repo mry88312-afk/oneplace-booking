@@ -1,8 +1,38 @@
 import ExcelJS from "exceljs";
 import { createHash } from "node:crypto";
+import { request } from "node:https";
 import { Bill, dateOnly } from "./domain";
 
-const ORIGIN = "https://jgbcontractkehsin.zeabur.app";
+const LEGACY_ORIGIN = "https://jgbcontractkehsin.zeabur.app";
+const MACHINE_ORIGIN = "https://jgb-api.oneplace.com.tw";
+
+function machineResponse(path: string, pem: string, body?: object): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const req = request(MACHINE_ORIGIN + path, {
+      method: body ? "POST" : "GET", cert: pem, key: pem,
+      headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+    }, res => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      res.on("error", reject);
+      res.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 1_000_000) {
+          res.destroy(new Error("JGB 匯出回應過大"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on("end", () => {
+        const status = res.statusCode ?? 502;
+        const content = [204, 205, 304].includes(status) ? null : Buffer.concat(chunks).toString("utf8");
+        resolve(new Response(content, { status }));
+      });
+    });
+    req.on("error", reject);
+    req.end(body ? JSON.stringify(body) : undefined);
+  });
+}
 const FEES = ["租金", "押金", "車位租金", "車位押金", "電費", "水費", "瓦斯費", "網路費", "第四台",
   "管理費", "車位管理費", "清潔費", "公共服務維護費用", "行政費用", "-續約＿押金遞延", "-折扣"];
 function number(v: unknown): number {
@@ -75,7 +105,8 @@ export async function parseWorkbook(bytes: ArrayBuffer): Promise<Bill[]> {
 export async function fetchCurrentBills() {
   const started = Date.now();
   const fetchJson = async (path: string, body?: object) => {
-    const r = await fetch(ORIGIN + path, { method: body ? "POST" : "GET", redirect: "error",
+    const pem = process.env.JGB_BOOKING_MACHINE_PEM;
+    const r = pem ? await machineResponse(path, pem, body) : await fetch(LEGACY_ORIGIN + path, { method: body ? "POST" : "GET", redirect: "error",
       headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(30000) });
     if (!r.ok) throw new Error(`JGB 匯出服務 HTTP ${r.status}`);
