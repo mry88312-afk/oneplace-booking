@@ -1,8 +1,62 @@
 import ExcelJS from "exceljs";
 import { createHash } from "node:crypto";
+import { request } from "node:https";
 import { Bill, dateOnly } from "./domain";
 
-const ORIGIN = "https://jgbcontractkehsin.zeabur.app";
+const LEGACY_ORIGIN = "https://jgbcontractkehsin.zeabur.app";
+const MACHINE_ORIGIN = "https://jgb-api.oneplace.com.tw";
+const BOOKING_IDENTITY = "calendar-booking@one-place-living-manus.iam.gserviceaccount.com";
+
+async function machinePem(): Promise<string> {
+  if (process.env.JGB_BOOKING_MACHINE_PEM) return process.env.JGB_BOOKING_MACHINE_PEM;
+  try {
+    const { loadServiceAccountCredentials } = await import("../routers/property/bookingHelpers");
+    const { google } = await import("googleapis");
+    const credentials = loadServiceAccountCredentials();
+    if (credentials.client_email !== BOOKING_IDENTITY) throw new Error("Unexpected booking identity");
+    const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+    const result = await google.secretmanager({ version: "v1", auth }).projects.secrets.versions.access({
+      name: "projects/oneplace-20261029/secrets/one820-jgb-booking-mtls/versions/latest",
+    }, { timeout: 10000, retry: false });
+    if (!result.data.payload?.data) throw new Error("Missing client identity");
+    return Buffer.from(result.data.payload.data, "base64").toString("utf8");
+  } catch {
+    throw new Error("JGB 備援憑證讀取失敗");
+  }
+}
+
+export async function checkJgbFallback(): Promise<boolean> {
+  const response = await machineResponse("/machine-health", await machinePem());
+  return response.status === 204;
+}
+
+function machineResponse(path: string, pem: string, body?: object): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const req = request(MACHINE_ORIGIN + path, {
+      method: body ? "POST" : "GET", cert: pem, key: pem,
+      headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+    }, res => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      res.on("error", reject);
+      res.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 1_000_000) {
+          res.destroy(new Error("JGB 匯出回應過大"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on("end", () => {
+        const status = res.statusCode ?? 502;
+        const content = [204, 205, 304].includes(status) ? null : Buffer.concat(chunks).toString("utf8");
+        resolve(new Response(content, { status }));
+      });
+    });
+    req.on("error", reject);
+    req.end(body ? JSON.stringify(body) : undefined);
+  });
+}
 const FEES = ["租金", "押金", "車位租金", "車位押金", "電費", "水費", "瓦斯費", "網路費", "第四台",
   "管理費", "車位管理費", "清潔費", "公共服務維護費用", "行政費用", "-續約＿押金遞延", "-折扣"];
 function number(v: unknown): number {
@@ -74,12 +128,38 @@ export async function parseWorkbook(bytes: ArrayBuffer): Promise<Bill[]> {
 }
 export async function fetchCurrentBills() {
   const started = Date.now();
+  let identity: Promise<string> | undefined;
+  let useMachine = false;
+  try {
+    const response = await fetch(LEGACY_ORIGIN + "/openapi.json", {
+      redirect: "error", signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error("舊站暫時無法使用");
+    const schema = await response.json();
+    useMachine = !schema?.paths?.["/api/export-bills"]?.post || !schema?.paths?.["/api/check-status"]?.get;
+  } catch {
+    useMachine = true;
+  }
   const fetchJson = async (path: string, body?: object) => {
-    const r = await fetch(ORIGIN + path, { method: body ? "POST" : "GET", redirect: "error",
+    const transport = async () => useMachine ? machineResponse(path, await (identity ??= machinePem()), body) : fetch(LEGACY_ORIGIN + path, { method: body ? "POST" : "GET", redirect: "error",
       headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(30000) });
-    if (!r.ok) throw new Error(`JGB 匯出服務 HTTP ${r.status}`);
-    return r.json();
+    const read = async () => {
+      const response = await transport();
+      if (!response.ok) throw new Error(`JGB 匯出服務 HTTP ${response.status}`);
+      return response.json();
+    };
+    try {
+      return await read();
+    } catch (err) {
+      const cause = err instanceof Error ? err.cause : undefined;
+      const beforeSend = cause && typeof cause === "object" && "code" in cause &&
+        ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT"].includes(String(cause.code));
+      // A lost POST response can conceal a successful job. GET can resume the same batch.
+      if (useMachine || (body && !beforeSend)) throw err;
+      useMachine = true;
+      return read();
+    }
   };
   const task = await fetchJson("/api/export-bills", {
     date_type: "all", bill_type: "income", statuses: ["unreceived"], async_mode: true,
@@ -87,6 +167,8 @@ export async function fetchCurrentBills() {
   if (task?.success !== true || !task.data?.batch_code || !task.data?.filename) throw new Error("JGB 未建立匯出批次");
   const batch = String(task.data.batch_code);
   for (let attempt = 0; attempt < 24 && Date.now() - started < 120000; attempt++) {
+    // Reserve part of the polling window for the same acknowledged batch on GCP.
+    if (attempt >= 8 || Date.now() - started >= 45000) useMachine = true;
     const state = await fetchJson(`/api/check-status?${new URLSearchParams({ batch_code: batch, filename: task.data.filename })}`);
     if (state?.success === true && Number(state.data?.process) === 100 && state.data?.url) {
       // Never read the shared latest_report.xlsx: other exports can overwrite it.
