@@ -174,10 +174,13 @@ export async function fetchCurrentBills(onePlace = onePlaceClient(), zeabur = ze
   });
   if (task?.success !== true || !task.data?.batch_code || !task.data?.filename) throw new Error("JGB 未建立匯出批次");
   const batch = String(task.data.batch_code);
+  let lastProgress = -1;
+  let lastProgressAt = Date.now();
+  let stalledPolls = 0;
   let checkedAlternate = false;
   for (let attempt = 0; attempt < 24 && Date.now() - started < 120000; attempt++) {
     // A stalled job may finish on the other host. Switch once, retaining the same batch.
-    if (!checkedAlternate && (attempt >= 8 || Date.now() - started >= 45000)) {
+    if (!checkedAlternate && (stalledPolls >= 8 || Date.now() - lastProgressAt >= 45000)) {
       checkedAlternate = true;
       machine = !machine;
     }
@@ -194,6 +197,14 @@ export async function fetchCurrentBills(onePlace = onePlaceClient(), zeabur = ze
       if (bytes.byteLength > 8_000_000) throw new Error("JGB 匯出檔案過大");
       return { bills: await parseWorkbook(bytes), fetchedAt: new Date(started), batch,
         digest: createHash("sha256").update(Buffer.from(bytes)).digest("hex") };
+    }
+    const progress = Number(state?.data?.process);
+    if (Number.isFinite(progress) && progress > lastProgress) {
+      lastProgress = progress;
+      lastProgressAt = Date.now();
+      stalledPolls = 0;
+    } else {
+      stalledPolls++;
     }
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
