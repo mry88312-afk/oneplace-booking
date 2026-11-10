@@ -219,9 +219,14 @@ export default function BookingPublic() {
   // P22b：身份驗證後是否需先做付款設定（匯訂）— 只在 renewal 啟用
   const needsRemittance = (tmpl: typeof template) => tmpl?.projectId === "renewal";
   // 付款設定完成後繼續原本流程（指定時段 or 選日期）
-  const continueAfterRemittance = (va?: string) => {
+  const continueAfterRemittance = (va?: string, updatedName?: string) => {
     setRemittanceDone(true);
     if (va) setRemittanceVA(va);
+    if (template?.lineRenewal) {
+      if (updatedName) setTenantName(updatedName);
+      setView(residences.length > 1 ? "selectRoom" : "calendar");
+      return;
+    }
     if (isPresetMode && presetSlotQuery.data) jumpToPresetForm(presetSlotQuery.data, template);
     else setView("calendar");
   };
@@ -266,7 +271,8 @@ export default function BookingPublic() {
     const r = residences[index];
     if (!r) return;
     applyResidence(r);
-    proceedAfterVerify();
+    if (template?.lineRenewal) setView("calendar");
+    else proceedAfterVerify();
   };
 
   const verifyRetryRef = useRef(0);
@@ -282,6 +288,12 @@ export default function BookingPublic() {
       setVerifiedJob((data as any).job || "");
       console.log("[BOOKING] verify success — isPresetMode:", isPresetMode, "presetSlot.data:", !!presetSlotQuery.data, "presetT:", presetT);
       // P96：多份有效合約（主客2/共同承租）先讓租客選房間，選完才導頁
+      if (template?.lineRenewal) {
+        setResidences(Array.isArray(data.residences) ? data.residences : []);
+        setView("remittance");
+        setIsVerifying(false);
+        return;
+      }
       if (!handleResidences(data)) { setIsVerifying(false); return; }
       if (isPresetMode && !(needsRemittance(template) && !remittanceDone) && !presetSlotQuery.data) {
         console.log("[BOOKING] presetSlot 尚未回來 → 先進 calendar，等 useEffect 補救");
@@ -751,6 +763,10 @@ export default function BookingPublic() {
   }
   if (view === "cancel") return <CancelView templateType={actionTemplateType || template.templateType} tenantName={actionTenantName} roomNumber={actionRoomNumber} currentBookingTime={actionBookingTime} isCancelling={cancelMutation.isPending} cancelled={actionCancelled} onConfirm={handleCancelConfirm} />;
 
+  if (template.lineRenewal && (view === "phone" || view === "register" || (view === "verify" && liffError && !lineUserId))) {
+    const missingBinding = verifyMutation.error?.message === "NEED_PHONE";
+    return <BookingErrorScreen title={missingBinding ? "LINE 帳號尚未綁定" : "無法確認 LINE 身分"} message={missingBinding ? "請聯絡客服協助綁定後，再重新開啟續約連結。" : "請從 LINE 重新開啟續約連結，若仍無法登入請聯絡客服。"} />;
+  }
   if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
   if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;
   if (view === "register") return <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />;

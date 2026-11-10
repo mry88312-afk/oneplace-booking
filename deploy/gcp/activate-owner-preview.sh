@@ -61,9 +61,7 @@ check(){ curl -sS --retry 2 --retry-all-errors --max-time 5 --resolve booking.on
 test "$(check "$url/")" = 200
 test "$(check -H 'Origin: https://booking.oneplace.com.tw' -X POST "$url/api/trpc/booking.confirmBooking")" = 403
 for endpoint in send-otp verify-otp; do
-  response=$(curl -sS --max-time 5 --resolve booking.oneplace.com.tw:443:127.0.0.1 -H 'Origin: https://booking.oneplace.com.tw' -H 'Content-Type: application/json' --data '{}' -o "$r/otp-denial.json" -w '%{http_code}' "$url/booking-link/$endpoint")
-  test "$response" = 403
-  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["success"] is False' "$r/otp-denial.json"
+  test "$(check -H 'Origin: https://booking.oneplace.com.tw' -X POST "$url/booking-link/$endpoint")" = 404
 done
 test "$(check -H 'Origin: https://other.example' -X POST "$url/booking-link/line-session")" = 403
 test "$(check "$url/api/outreach/run")" = 404

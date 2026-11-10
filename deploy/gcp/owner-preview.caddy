@@ -34,14 +34,6 @@ booking.oneplace.com.tw {
         rewrite * /line-session
         reverse_proxy 127.0.0.1:GATE_PORT
     }
-    @otp {
-        method POST
-        path /booking-link/send-otp /booking-link/verify-otp
-    }
-    handle @otp {
-        uri replace /booking-link/ /api/ 1
-        reverse_proxy 127.0.0.1:GATE_PORT
-    }
     @template {
         method GET POST
         path /api/trpc/booking.getPublicTemplate

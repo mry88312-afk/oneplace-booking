@@ -15,7 +15,8 @@ import * as schema from "../../../drizzle/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { remittanceOwnerSchema, remittanceReceiptSchema } from "../../../shared/remittance";
-import { renewalRemittanceService } from "../../booking/remittance";
+import { bindingHelp, renewalProfileChanges, renewalProfileStore, usesLineRenewal } from "../../booking/renewalProfile";
+import { bookingLinePrincipal, renewalRemittanceService } from "../../booking/remittance";
 import {
   handleGetAvailableSlots,
   handleGetAvailableSlotsMultiDay,
@@ -47,11 +48,20 @@ const bookingActionContextSchema = z.object({
 });
 
 export const bookingRouter = router({
+  saveRenewalProfile: publicProcedure
+    .input(renewalProfileChanges)
+    .mutation(async ({ input, ctx }) => {
+      assertBookingWritesEnabled();
+      const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+      await (await renewalProfileStore()).save(uid, input);
+      return { success: true };
+    }),
   submitRenewalRemittance: publicProcedure
     .input(remittanceOwnerSchema.extend({ verifyToken: z.string().regex(/^[a-f0-9]{48}$/) }))
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
       assertBookingWritesEnabled();
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "請重新開啟續約預約" });
       return (await renewalRemittanceService(ctx.req.headers.cookie)).submit(input);
     }),
   getRenewalRemittance: publicProcedure
@@ -59,6 +69,7 @@ export const bookingRouter = router({
     // POST keeps the receipt capability out of URLs, browser history and access logs.
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "請重新開啟續約預約" });
       return (await renewalRemittanceService(ctx.req.headers.cookie)).status(input);
     }),
   completeRenewalRemittance: publicProcedure
@@ -66,6 +77,7 @@ export const bookingRouter = router({
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
       assertBookingWritesEnabled();
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "請重新開啟續約預約" });
       return (await renewalRemittanceService(ctx.req.headers.cookie)).complete(input);
     }),
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
@@ -380,6 +392,7 @@ export const bookingRouter = router({
         dailyStartTime: template.dailyStartTime,
         dailyEndTime: template.dailyEndTime,
         liffId: commonBookingLiff(template.projectId) || template.liffId || null,
+        lineRenewal: usesLineRenewal(template.projectId),
         ownerPreview: Boolean(process.env.BOOKING_PREVIEW_LIFF_ID),
         instructionEnabled: template.instructionEnabled,
         instructionText: template.instructionText || null,
@@ -397,7 +410,11 @@ export const bookingRouter = router({
         uid: z.string().min(1),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      if (usesLineRenewal(input.projectId)) {
+        const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+        return handleVerifyTenantUid({ ...input, uid });
+      }
       return handleVerifyTenantUid(input);
     }),
 
@@ -411,6 +428,7 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      if (usesLineRenewal(input.projectId)) throw new TRPCError({ code: "FORBIDDEN", message: bindingHelp });
       return handleVerifyByPhone(input);
     }),
 
@@ -427,6 +445,7 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      if (usesLineRenewal(input.projectId)) throw new TRPCError({ code: "FORBIDDEN", message: bindingHelp });
       assertNewBookingAllowed(input.projectId);
       const { ragicPost, RAGIC_API_KEY_VALUE } = await import("./bookingHelpers");
       if (!RAGIC_API_KEY_VALUE) {
@@ -499,6 +518,12 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      if (usesLineRenewal(input.projectId)) {
+        const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+        if (uid !== input.uid) throw new TRPCError({ code: "FORBIDDEN", message: "請重新從 LINE 開啟預約" });
+        const virtualAccount = await (await renewalProfileStore()).existingAccount(uid);
+        return handleConfirmBooking({ ...input, uid, virtualAccount }, ctx);
+      }
       return handleConfirmBooking(input, ctx);
     }),
 
@@ -612,6 +637,7 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "續約不提供匯款帳號寫入" });
       const { ragicGet, ragicPut, RAGIC_API_KEY_VALUE } = await import("./bookingHelpers");
       if (!RAGIC_API_KEY_VALUE) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ragic API 尚未設定" });

@@ -95,21 +95,24 @@ export function createRenewalRemittance(deps: Dependencies) {
   };
 }
 
+export async function bookingLinePrincipal(cookieHeader?: string) {
+  const bridge = process.env.BOOKING_REMITTANCE_BRIDGE;
+  if (!bridge) return fail('未啟用 LINE 續約驗證', 'FORBIDDEN');
+  const matches = (cookieHeader || '').split(';').map(value => value.trim())
+    .filter(value => /^__Host-booking_line=[0-9a-f]{64}$/.test(value));
+  if (matches.length !== 1) return fail('請重新從 LINE 開啟預約', 'UNAUTHORIZED');
+  const cookie = matches[0];
+  const result = await fetch(bridge + '/principal', {
+    headers: { Cookie: cookie }, redirect: 'error', signal: AbortSignal.timeout(5000),
+  });
+  const uid = result.headers.get('X-Booking-Subject') || '';
+  if (!result.ok || !/^U[0-9a-f]{32}$/i.test(uid)) return fail('LINE 身分驗證已過期', 'UNAUTHORIZED');
+  return { cookie, uid };
+}
+
 export async function renewalRemittanceService(cookieHeader?: string) {
   const bridge = process.env.BOOKING_REMITTANCE_BRIDGE;
-  let cookie = '';
-  let verifiedUid = '';
-  if (bridge) {
-    const matches = (cookieHeader || '').split(';').map(value => value.trim())
-      .filter(value => /^__Host-booking_line=[0-9a-f]{64}$/.test(value));
-    if (matches.length !== 1) return fail('請重新從 LINE 開啟預約', 'UNAUTHORIZED');
-    cookie = matches[0];
-    const result = await fetch(bridge + '/principal', {
-      headers: { Cookie: cookie }, redirect: 'error', signal: AbortSignal.timeout(5000),
-    });
-    verifiedUid = result.headers.get('X-Booking-Subject') || '';
-    if (!result.ok || !/^U[0-9a-f]{32}$/i.test(verifiedUid)) return fail('LINE 身分驗證已過期', 'UNAUTHORIZED');
-  }
+  const { cookie, uid: verifiedUid } = bridge ? await bookingLinePrincipal(cookieHeader) : { cookie: '', uid: '' };
   const { ragicGet, ragicPut } = await import('../routers/property/bookingHelpers');
   const service = createRenewalRemittance({
     readTenant: phone => ragicGet('for-system-use/2', { where: `1007372,eq,${phone}`, limit: '2', naming: 'EID' }),
