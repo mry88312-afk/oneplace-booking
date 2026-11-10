@@ -37,7 +37,7 @@ const ENQUEUE_PROMPT = `【一方生活｜統一發訊中樞——投遞 API 串
 
 任何系統要發訊息給室友（純文字或圖文卡片），請改打這支 API：訊息會進排程、看板可控管（可跳過/取消）、時間到自動發送。
 
-端點：POST https://oneplace-booking.zeabur.app/api/outreach/enqueue
+端點：POST https://booking.oneplace.com.tw/api/outreach/enqueue
 Header：
   Content-Type: application/json
   x-outreach-secret: <共享密鑰，向管理者索取>
@@ -53,7 +53,7 @@ Body 欄位：
   tag        必填。分類標籤（看板篩選用），例 "帳務通知"
 
 範例 A — 純文字（最常用、最簡單，只要帶 text）：
-curl -X POST https://oneplace-booking.zeabur.app/api/outreach/enqueue \\
+curl -X POST https://booking.oneplace.com.tw/api/outreach/enqueue \\
   -H "Content-Type: application/json" \\
   -H "x-outreach-secret: <密鑰>" \\
   -d '{
@@ -65,7 +65,7 @@ curl -X POST https://oneplace-booking.zeabur.app/api/outreach/enqueue \\
   }'
 
 範例 B — 圖文卡片（要排版/按鈕才用 card；會長成方框卡片）：
-curl -X POST https://oneplace-booking.zeabur.app/api/outreach/enqueue \\
+curl -X POST https://booking.oneplace.com.tw/api/outreach/enqueue \\
   -H "Content-Type: application/json" \\
   -H "x-outreach-secret: <密鑰>" \\
   -d '{
@@ -138,8 +138,8 @@ outreach.recompute_schedule() 會自動掃過所有 enabled 規則產生排程�
 
 【互動回饋按鈕（選用）】
 若卡片要「住得很舒服 / 請小幫手協助」回饋按鈕，footer 放兩顆 uri 按鈕：
-- 住得很舒服：uri 為 https://oneplace-booking.zeabur.app/f/{{schedule_id}}?r=ok
-- 請小幫手協助：uri 為 https://oneplace-booking.zeabur.app/f/{{schedule_id}}?r=help
+- 住得很舒服：uri 為 https://booking.oneplace.com.tw/f/{{schedule_id}}?r=ok
+- 請小幫手協助：uri 為 https://booking.oneplace.com.tw/f/{{schedule_id}}?r=help
 {{schedule_id}} 系統發送時會自動代入；回饋會寫進 Ragic「回饋單」並依設定通知，且同一張卡只認第一次點擊。
 
 【篩選（重要）】
