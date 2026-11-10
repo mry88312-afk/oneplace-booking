@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2, Wallet, ShieldCheck } from "lucide-react";
 import { BookingContainer } from "./utils";
+import { ensureBookingSession } from "@/lib/renewalSession";
 import { createRemittanceFlow } from "@/lib/remittanceFlow";
 
 // 你現有的 tenant-form-liff（匯訂）服務公開網址；機密邏輯都在這台。
@@ -29,6 +30,7 @@ const REMITTANCE_API =
   "https://deposit.zeabur.app/api"; // tenant-form-liff（匯訂）正式服務
 
 async function postJson(path: string, body: any): Promise<any> {
+  await ensureBookingSession();
   const resp = await fetch(`${REMITTANCE_API}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

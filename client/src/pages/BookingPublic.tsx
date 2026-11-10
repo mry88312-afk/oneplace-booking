@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { ensureBookingSession } from "@/lib/renewalSession";
 import liff from "@line/liff";
 import { bookingRequest, confirmBookingRequest } from "@/lib/bookingRequest";
 import { publicErrorMessage } from "@shared/bookingErrors";
@@ -426,6 +427,7 @@ export default function BookingPublic() {
         const isLoggedIn = liff.isLoggedIn();
         const isInClient = liff.isInClient();
         if (isLoggedIn) {
+          if (templateQuery.data?.ownerPreview) await ensureBookingSession();
           sessionStorage.removeItem(ATTEMPT_KEY);
           try { const p = await liff.getProfile(); if (p.userId) { setLineUserId(p.userId); setLiffReady(true); return; } } catch {}
           try { const t = liff.getDecodedIDToken(); if (t?.sub) { setLineUserId(t.sub); setLiffReady(true); return; } } catch {}

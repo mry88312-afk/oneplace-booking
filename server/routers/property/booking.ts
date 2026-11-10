@@ -52,21 +52,21 @@ export const bookingRouter = router({
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
       assertBookingWritesEnabled();
-      return (await renewalRemittanceService()).submit(input);
+      return (await renewalRemittanceService(ctx.req.headers.cookie)).submit(input);
     }),
   getRenewalRemittance: publicProcedure
     .input(remittanceReceiptSchema.extend({ phone: z.string().regex(/^\d{8,15}$/) }))
     // POST keeps the receipt capability out of URLs, browser history and access logs.
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
-      return (await renewalRemittanceService()).status(input);
+      return (await renewalRemittanceService(ctx.req.headers.cookie)).status(input);
     }),
   completeRenewalRemittance: publicProcedure
     .input(remittanceReceiptSchema.extend(remittanceOwnerSchema.shape).extend({ email: z.string().max(200).optional(), job: z.string().max(200).optional() }))
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
       assertBookingWritesEnabled();
-      return (await renewalRemittanceService()).complete(input);
+      return (await renewalRemittanceService(ctx.req.headers.cookie)).complete(input);
     }),
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
 
@@ -381,7 +381,8 @@ export const bookingRouter = router({
         bookableDaysAhead: template.bookableDaysAhead,
         dailyStartTime: template.dailyStartTime,
         dailyEndTime: template.dailyEndTime,
-        liffId: template.liffId || null,
+        liffId: process.env.BOOKING_PREVIEW_LIFF_ID || template.liffId || null,
+        ownerPreview: Boolean(process.env.BOOKING_PREVIEW_LIFF_ID),
         instructionEnabled: template.instructionEnabled,
         instructionText: template.instructionText || null,
         minLeadDays: template.minLeadDays ?? 0,
