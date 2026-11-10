@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { postToHub } from "./bookingConfirmHandler";
+import { postToHub, relayPath } from "../../booking/hubRouting";
 
 for (const scenario of [
   { name: "LINE sentMessages acknowledgement", body: JSON.stringify({ sentMessages: [{ id: "test-message" }] }), ok: true },
@@ -11,12 +11,15 @@ for (const scenario of [
   { name: "HTTP 200 null response", body: "null", ok: false },
 ]) {
   test(scenario.name, async (t) => {
+    const prior = process.env.BOOKING_WEBHOOK_SECRET;
+    process.env.BOOKING_WEBHOOK_SECRET = "test-only";
+    t.after(() => { if (prior === undefined) delete process.env.BOOKING_WEBHOOK_SECRET; else process.env.BOOKING_WEBHOOK_SECRET = prior; });
     let calls = 0;
     t.mock.method(globalThis, "fetch", async () => {
       calls++;
       return new Response(scenario.body, { status: 200 });
     });
-    const result = await postToHub("https://example.invalid/api/line/relay", {});
+    const result = await postToHub(relayPath, {});
     assert.equal(result.ok, scenario.ok);
     assert.equal(calls, 1, "do not retry an ambiguous or rejected HTTP 200 response");
     if (!scenario.ok) assert.ok(result.error);
