@@ -4,6 +4,7 @@ process.env.TZ = "UTC";
 import "dotenv/config";
 import express from "express";
 import compression from "compression";
+import { forwardOldBooking } from "./legacyBookingForward";
 import crypto from "node:crypto";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -19,6 +20,7 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  app.use(forwardOldBooking);
 
   // 壓縮 API 回應
   app.use(compression());
