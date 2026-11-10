@@ -10,6 +10,7 @@ const gate = createGate({ liffId:'2006833424-znZYKjip', subjectHash:createHash('
     sub:opts.body.get('id_token')==='one.two.three' ? uid : 'U'+'b'.repeat(32) }) });
 const calls = [];
 const server = createGateway(gate,key, async (url,opts) => {
+  assert.match(opts.headers.Cookie,/^__Host-booking_line=[0-9a-f]{64}$/);
   const [subject,time,mac]=opts.headers['X-Deposit-Proof'].split('.');
   assert.equal(subject,uid);
   assert.equal(mac,createHmac('sha256',key).update([uid,time,opts.headers.Cookie].join('\n')).digest('hex'));
@@ -27,7 +28,7 @@ const server = createGateway(gate,key, async (url,opts) => {
     assert.equal(login.status,204);
     const cookie=login.headers.get('set-cookie').split(';')[0];
     assert.match(cookie,/^__Host-booking_line=[0-9a-f]{64}$/);
-    const headers={Cookie:cookie};
+    const headers={Cookie:cookie+'; unrelated=private'};
     assert.equal((await fetch(url+'/principal',{headers})).headers.get('X-Booking-Subject'),uid);
     for(const path of ['/api/send-otp','/api/verify-otp','/api/submit']) assert.equal((await post(path,{},headers)).status,200);
     const receipt='/api/submissions/12345678-1234-4123-8123-123456789abc';

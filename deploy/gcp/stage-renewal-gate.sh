@@ -29,7 +29,7 @@ docker run --rm --network none "${opts[@]}" "$depimage" node /gate/renewal-gatew
 for net in one824-booking one824-deposit; do docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null; done
 if ! docker inspect "$core" --format '{{json .NetworkSettings.Networks}}' | grep -q '"one824-deposit"'; then docker network connect --alias deposit-core one824-deposit "$core"; fi
 if ! docker inspect "$gate" >/dev/null 2>&1; then
-  docker create --name "$gate" --restart unless-stopped --network one824-booking --network-alias renewal-gate "${opts[@]}" --log-driver none \
+  docker create --name "$gate" --restart unless-stopped --network one824-booking "${opts[@]}" --log-driver none \
     -p 127.0.0.1::3000 --mount "type=bind,src=$base/deposit-occupation-01/proof,dst=/run/occupation-proof,readonly" \
     --mount "type=bind,src=$pilot,dst=/run/pilot,readonly" -e PILOT_SUBJECT_FILE=/run/pilot "$depimage" node /gate/renewal-gateway.cjs >/dev/null
   docker network connect one824-deposit "$gate"

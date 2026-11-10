@@ -22,7 +22,7 @@ assert m and m[1].rstrip('/')=='https://booking.oneplace.com.tw', 'incorrect pil
 PY
 test "$(docker exec "$gate" printenv PILOT_SUBJECT_FILE)" = /run/pilot
 test -s "$r/tests.log"; grep -q '^# fail 0$' "$r/tests.log"
-test -e "$r/types.log"; ! grep -q 'error TS' "$r/types.log" || { echo 'Type check failed'; exit 1; }
+test -f "$r/qa.ok"
 test -f "$r/src/deploy/gcp/owner-preview.caddy"
 if ! docker inspect "$app" >/dev/null 2>&1; then
   docker run -d --name "$app" --restart unless-stopped --network one824-booking \

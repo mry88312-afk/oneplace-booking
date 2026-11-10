@@ -19,7 +19,9 @@ function createGateway(gate, key, upstreamFetch = fetch) {
   // Only these four operations can reach the already-running deposit application.
   // Existing OTPs and receipts stay with the same process and store as the tenant form.
   async function forward(req, res) {
-    const cookie = req.get('Cookie') || '';
+    const cookies = (req.get('Cookie') || '').split(';').map(item => item.trim())
+      .filter(item => /^__Host-booking_line=[0-9a-f]{64}$/.test(item));
+    const cookie = cookies.length === 1 ? cookies[0] : '';
     const session = gate.sessionFor(cookie);
     if (!session) return res.status(403).json({ success: false, message: '請重新從 LINE 開啟預約。' });
     const time = String(Date.now());
