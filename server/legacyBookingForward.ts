@@ -28,6 +28,14 @@ export function legacyDestination(path: string, search: string) {
 }
 
 export const forwardOldBooking: RequestHandler = (req, res, next) => {
+  // Old LIFF apps now land directly on GCP. Switch to the common LIFF before
+  // its SDK normalizes the legacy path to / and loses renewal vs checkout.
+  if (req.hostname === 'booking.oneplace.com.tw' && (req.method === 'GET' || req.method === 'HEAD') &&
+      (req.path === '/book/renewal' || req.path === '/book/checkout') && 'liff.state' in req.query) {
+    const target = legacyDestination(req.path, new URL(origin + req.originalUrl).search);
+    res.set('Cache-Control', 'no-store').redirect(307, target);
+    return;
+  }
   if (req.hostname !== oldHost) return next();
   const url = new URL(origin + req.originalUrl);
   const path = url.pathname;
