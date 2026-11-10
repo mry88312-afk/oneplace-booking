@@ -47,17 +47,21 @@ function createGateway(gate, key, upstreamFetch = fetch) {
       res.status(503).json({success:false,message:'匯訂回應尚未確認，請勿重複送件。'});
     }
   }
-  app.post(['/api/send-otp','/api/verify-otp','/api/submit'], express.json({limit:'16kb'}), forward);
-  app.get(/^\/api\/submissions\/[0-9a-f-]{36}$/, forward);
+  if (key) {
+    app.post(['/api/send-otp','/api/verify-otp','/api/submit'], express.json({limit:'16kb'}), forward);
+    app.get(/^\/api\/submissions\/[0-9a-f-]{36}$/, forward);
+  }
   gate.install(app, express);
   return app;
 }
 
 if (require.main === module) {
   const subjectHash = process.env.PILOT_SUBJECT_FILE && readFileSync(process.env.PILOT_SUBJECT_FILE, 'utf8').trim();
-  const key = readFileSync('/run/occupation-proof');
-  if (key.length !== 32) throw Error('Invalid deposit proof key');
-  const gate = createGate({ tenants: !subjectHash, subjectHash, liffId: '2006833424-znZYKjip' });
+  const publicLiff = process.env.BOOKING_PUBLIC_LIFF_ID;
+  if (!subjectHash && !publicLiff) throw Error('Missing booking gate mode');
+  const key = publicLiff ? null : readFileSync('/run/occupation-proof');
+  if (key && key.length !== 32) throw Error('Invalid deposit proof key');
+  const gate = createGate({ tenants: !subjectHash, subjectHash, liffId: publicLiff || '2006833424-znZYKjip' });
   createGateway(gate, key).listen(3000);
 }
 module.exports = { createGateway };

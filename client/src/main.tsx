@@ -1,4 +1,4 @@
-import { ensureBookingSession } from "@/lib/renewalSession";
+import { ensureBookingSession, refreshExistingBookingSession } from "@/lib/renewalSession";
 import { trpc } from "@/lib/trpc";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
@@ -40,6 +40,7 @@ async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   let resp: Response;
   try {
     if (/booking\.(submitRenewalRemittance|getRenewalRemittance|completeRenewalRemittance)/.test(String(input))) await ensureBookingSession();
+    else if (String(input).includes("/api/trpc/booking.")) await refreshExistingBookingSession();
     resp = await globalThis.fetch(input, {
       ...(init ?? {}),
       credentials: "include",

@@ -175,7 +175,7 @@ export default function BookingPublic() {
   // 指定時段模式：解析 t 參數
   const presetSlotQuery = trpc.booking.resolvePresetSlot.useQuery(
     { projectId, t: presetT },
-    { enabled: !entryClosed && !isActionMode && isPresetMode && !!projectId, retry: false }
+    { enabled: !entryClosed && !isActionMode && isPresetMode && !!projectId && !!template && (!template.boundTenantOnly || !!lineUserId), retry: false }
   );
 
   const [multiDayDates, setMultiDayDates] = useState<string[]>([]);
@@ -439,7 +439,7 @@ export default function BookingPublic() {
         const isLoggedIn = liff.isLoggedIn();
         const isInClient = liff.isInClient();
         if (isLoggedIn) {
-          if (templateQuery.data?.ownerPreview) await ensureBookingSession();
+          if (templateQuery.data?.lineSessionRequired) await ensureBookingSession();
           sessionStorage.removeItem(ATTEMPT_KEY);
           try { const p = await liff.getProfile(); if (p.userId) { setLineUserId(p.userId); setLiffReady(true); return; } } catch {}
           try { const t = liff.getDecodedIDToken(); if (t?.sub) { setLineUserId(t.sub); setLiffReady(true); return; } } catch {}
@@ -763,9 +763,9 @@ export default function BookingPublic() {
   }
   if (view === "cancel") return <CancelView templateType={actionTemplateType || template.templateType} tenantName={actionTenantName} roomNumber={actionRoomNumber} currentBookingTime={actionBookingTime} isCancelling={cancelMutation.isPending} cancelled={actionCancelled} onConfirm={handleCancelConfirm} />;
 
-  if (template.lineRenewal && (view === "phone" || view === "register" || (view === "verify" && liffError && !lineUserId))) {
+  if ((template.lineRenewal || template.boundTenantOnly) && (view === "phone" || view === "register" || (view === "verify" && liffError && !lineUserId))) {
     const missingBinding = verifyMutation.error?.message === "NEED_PHONE";
-    return <BookingErrorScreen title={missingBinding ? "LINE 帳號尚未綁定" : "無法確認 LINE 身分"} message={missingBinding ? "請聯絡客服協助綁定後，再重新開啟續約連結。" : "請從 LINE 重新開啟續約連結，若仍無法登入請聯絡客服。"} />;
+    return <BookingErrorScreen title={missingBinding ? "LINE 帳號尚未綁定" : "無法確認 LINE 身分"} message={missingBinding ? "請聯絡客服協助綁定後，再重新開啟預約連結。" : "請從 LINE 重新開啟預約連結，若仍無法登入請聯絡客服。"} />;
   }
   if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
   if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;

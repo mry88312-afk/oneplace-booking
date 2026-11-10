@@ -17,10 +17,14 @@ export async function ensureBookingSession() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken: liff.getIDToken(), accessToken: liff.getAccessToken() }),
       });
-      if (!response.ok) throw new Error('請從受邀的 LINE 帳號重新開啟預約連結。');
+      if (!response.ok) throw new Error('請從 LINE 重新開啟預約連結以確認身分。');
       lastIdentity = identity;
       validUntil = Date.now() + 5 * 60_000;
     })().finally(() => { pending = undefined; });
   }
   await pending;
+}
+
+export function refreshExistingBookingSession() {
+  return lastIdentity ? ensureBookingSession() : undefined;
 }
