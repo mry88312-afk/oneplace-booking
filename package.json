@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/index.ts",
     "build:client": "vite build",
-    "build:server": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build:server": "esbuild server/index.ts server/booking/hubRouting.ts --outbase=server --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "build": "npm run build:client && npm run build:server",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit",
