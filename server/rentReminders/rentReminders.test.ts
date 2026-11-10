@@ -6,19 +6,74 @@ import ExcelJS from "exceljs";
 import { runRentReminders } from "./service";
 import { relayPushOnce } from "../routers/property/bookingConfirmHandler";
 
-test("舊站已收到匯出但回應不明，不向另一站重送", async t => {
+type FixtureSite = "OnePlace" | "Zeabur";
+type ReportFixture = (site: FixtureSite, path: string, body?: object) => Promise<Response>;
+
+function routeFixture(reply: ReportFixture) {
   const calls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (input: string) => {
-    const url = new URL(input);
-    calls.push(url.hostname + url.pathname);
-    if (url.pathname === "/openapi.json") {
-      return Response.json({ paths: { "/api/export-bills": { post: {} }, "/api/check-status": { get: {} } } });
-    }
-    return new Response(null, { status: 504 });
+  const at = (site: FixtureSite) => async (path: string, body?: object) => {
+    calls.push(`${site} ${body ? "POST" : "GET"} ${path}`);
+    return reply(site, path, body);
+  };
+  return { calls, run: () => fetchCurrentBills(at("OnePlace"), at("Zeabur")) };
+}
+
+const health = "OnePlace GET /machine-health";
+const post = "POST /api/export-bills";
+const status = "GET /api/check-status?batch_code=B1&filename=report.xlsx";
+const acceptedBatch = () => Response.json({ success: true, data: { batch_code: "B1", filename: "report.xlsx" } });
+const readyReport = () => Response.json({ success: true, data: { process: 100, url: "https://img.jgbsmart.com/fixture.xlsx" } });
+
+for (const scenario of ["primary", "health-down", "cert-unavailable", "connect-refused", "status-down"] as const) {
+  test(`報表主備：${scenario}，同一批次完成下載與解析`, async t => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet("帳務報表").addRows(exportFixture());
+    const bytes = await workbook.xlsx.writeBuffer();
+    t.mock.method(globalThis, "fetch", async (url: URL) => {
+      assert.equal(url.href, "https://img.jgbsmart.com/fixture.xlsx");
+      return new Response(Buffer.from(bytes));
+    });
+    const fixture = routeFixture(async (site, path, body) => {
+      if (path === "/machine-health") {
+        if (scenario === "cert-unavailable") throw new Error("missing certificate");
+        return new Response(null, { status: scenario === "health-down" ? 503 : 204 });
+      }
+      if (body) {
+        if (scenario === "connect-refused" && site === "OnePlace")
+          throw Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" });
+        return acceptedBatch();
+      }
+      if (scenario === "status-down" && site === "OnePlace") return new Response(null, { status: 502 });
+      return readyReport();
+    });
+    const report = await fixture.run();
+    assert.equal(report.batch, "B1");
+    assert.ok(report.bills.length > 0);
+    const expected: Record<typeof scenario, string[]> = {
+      primary: [health, `OnePlace ${post}`, `OnePlace ${status}`],
+      "health-down": [health, `Zeabur ${post}`, `Zeabur ${status}`],
+      "cert-unavailable": [health, `Zeabur ${post}`, `Zeabur ${status}`],
+      "connect-refused": [health, `OnePlace ${post}`, `Zeabur ${post}`, `Zeabur ${status}`],
+      "status-down": [health, `OnePlace ${post}`, `OnePlace ${status}`, `Zeabur ${status}`],
+    };
+    assert.deepEqual(fixture.calls, expected[scenario]);
   });
-  await assert.rejects(fetchCurrentBills(), /HTTP 504/);
-  assert.deepEqual(calls, ["jgbcontractkehsin.zeabur.app/openapi.json", "jgbcontractkehsin.zeabur.app/api/export-bills"]);
-});
+}
+
+for (const site of ["OnePlace", "Zeabur"] as const) {
+  for (const failure of ["504", "reset", "invalid-json", "missing-batch"] as const) {
+    test(`${site} 匯出回應 ${failure} 不重送`, async () => {
+      const fixture = routeFixture(async (_site, path) => {
+        if (path === "/machine-health") return new Response(null, { status: site === "OnePlace" ? 204 : 503 });
+        if (failure === "reset") throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+        if (failure === "missing-batch") return Response.json({ success: true });
+        return new Response("unknown", { status: failure === "504" ? 504 : 200 });
+      });
+      await assert.rejects(fixture.run());
+      assert.deepEqual(fixture.calls, [health, `${site} ${post}`]);
+    });
+  }
+}
 
 const bill: Bill = {
   id: "123", contractId: "456", name: "2026/08-帳單", payer: "公司付款人", room: "測試 A301",
