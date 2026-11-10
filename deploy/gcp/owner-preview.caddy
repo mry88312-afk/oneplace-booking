@@ -39,8 +39,7 @@ booking.oneplace.com.tw {
         path /booking-link/send-otp /booking-link/verify-otp
     }
     handle @otp {
-        uri strip_prefix /booking-link
-        rewrite * /api{uri}
+        uri replace /booking-link/ /api/ 1
         reverse_proxy 127.0.0.1:GATE_PORT
     }
     @template {

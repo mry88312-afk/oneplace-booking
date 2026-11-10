@@ -255,13 +255,13 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
     else createMutation.mutate(payload as any);
   };
 
-  const copyBookingUrl = (projectId: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/book/${projectId}`);
+  const copyBookingUrl = (projectId: string, publicUrl: string | null) => {
+    navigator.clipboard.writeText(publicUrl || `${window.location.origin}/book/${projectId}`);
     toast.success("預約連結已複製");
   };
 
   // 指定時段連結 Dialog state
-  const [presetDialog, setPresetDialog] = useState<{ open: boolean; projectId: string; liffId?: string } | null>(null);
+  const [presetDialog, setPresetDialog] = useState<{ open: boolean; projectId: string; liffId?: string; publicUrl: string | null } | null>(null);
   const [presetDate, setPresetDate] = useState("");
   const [presetHour, setPresetHour] = useState("10");
   const [presetMinute, setPresetMinute] = useState("00");
@@ -273,12 +273,12 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
     if (!m || !d) { toast.error("日期格式錯誤"); return; }
     // 使用 8 碼格式 MMDDHHMM（後端自動補年份）
     const t = `${m}${d}${presetHour.padStart(2, "0")}${presetMinute.padStart(2, "0")}`;
-    const liffId = presetDialog.liffId;
-    if (liffId) {
-      setPresetGeneratedUrl(`https://liff.line.me/${liffId}?t=${t}`);
-    } else {
-      setPresetGeneratedUrl(`${window.location.origin}/book/${presetDialog.projectId}?t=${t}`);
-    }
+    const base = presetDialog.publicUrl || (presetDialog.liffId
+      ? `https://liff.line.me/${presetDialog.liffId}`
+      : `${window.location.origin}/book/${presetDialog.projectId}`);
+    const url = new URL(base);
+    url.searchParams.set("t", t);
+    setPresetGeneratedUrl(url.toString());
   };
 
   const copyPresetUrl = () => {
@@ -353,8 +353,8 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
                     </div>
                     <div className="flex items-center gap-2 ml-4">
                       <Switch checked={t.isActive} onCheckedChange={(checked) => toggleActiveMutation.mutate({ id: t.id, isActive: checked })} aria-label="啟用/停用" />
-                      <Button variant="outline" size="sm" onClick={() => copyBookingUrl(t.projectId)}><Copy className="h-3 w-3 mr-1" /> 複製連結</Button>
-                      <Button variant="outline" size="sm" onClick={() => { setPresetDialog({ open: true, projectId: t.projectId, liffId: t.liffId || undefined }); setPresetDate(""); setPresetHour("10"); setPresetMinute("00"); setPresetGeneratedUrl(""); }}>
+                      <Button variant="outline" size="sm" onClick={() => copyBookingUrl(t.projectId, t.publicBookingUrl)}><Copy className="h-3 w-3 mr-1" /> 複製連結</Button>
+                      <Button variant="outline" size="sm" onClick={() => { setPresetDialog({ open: true, projectId: t.projectId, liffId: t.liffId || undefined, publicUrl: t.publicBookingUrl }); setPresetDate(""); setPresetHour("10"); setPresetMinute("00"); setPresetGeneratedUrl(""); }}>
                         <CalendarDays className="h-3 w-3 mr-1" /> 指定時段
                       </Button>
                       <Button variant="outline" size="sm" onClick={() => openEdit(t.id)}><Pencil className="h-3 w-3 mr-1" /> 編輯</Button>
@@ -636,7 +636,7 @@ export default function BookingAdmin({ onLogout }: { onLogout?: () => void }) {
               </div>
               {presetDialog?.liffId && (
                 <div className="text-xs text-muted-foreground p-2 bg-muted rounded-md">
-                  將使用 LIFF 連結：https://liff.line.me/{presetDialog.liffId}?t=...
+                  將使用預約連結並帶入指定時段
                 </div>
               )}
               {!presetDialog?.liffId && (

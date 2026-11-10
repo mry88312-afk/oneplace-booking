@@ -1,4 +1,4 @@
-import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled } from "../../booking/runtime";
+import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled, commonBookingLiff, commonBookingUrl } from "../../booking/runtime";
 import { BOOKING_UNAVAILABLE } from "../../../shared/bookingErrors";
 import { assertNewBookingAllowed, assertTemplateAccess } from "../../booking/projectAccess";
 /**
@@ -74,10 +74,8 @@ export const bookingRouter = router({
   listTemplates: adminProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: BOOKING_UNAVAILABLE });
-    return db
-      .select()
-      .from(schema.bookingTemplates)
-      .orderBy(desc(schema.bookingTemplates.createdAt));
+    const templates = await db.select().from(schema.bookingTemplates).orderBy(desc(schema.bookingTemplates.createdAt));
+    return templates.map(template => ({ ...template, publicBookingUrl: commonBookingUrl(template.projectId) }));
   }),
 
   /** 取得單一模版（含分流規則和表單欄位） */
@@ -381,7 +379,7 @@ export const bookingRouter = router({
         bookableDaysAhead: template.bookableDaysAhead,
         dailyStartTime: template.dailyStartTime,
         dailyEndTime: template.dailyEndTime,
-        liffId: process.env.BOOKING_PREVIEW_LIFF_ID || template.liffId || null,
+        liffId: commonBookingLiff(template.projectId) || template.liffId || null,
         ownerPreview: Boolean(process.env.BOOKING_PREVIEW_LIFF_ID),
         instructionEnabled: template.instructionEnabled,
         instructionText: template.instructionText || null,

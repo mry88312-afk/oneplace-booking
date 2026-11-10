@@ -28,7 +28,7 @@ function taipeiParts(ms: number) {
 }
 
 /** 卡片底部動作按鈕（變更時間 / 取消），需 liffId */
-function buildActionFooter(liffId: string | null, bookingId: number, templateType: string): any | undefined {
+function buildActionFooter(liffId: string | null, bookingId: number, templateType: string, projectId: string): any | undefined {
   if (!liffId) return undefined;
   return {
     type: "box",
@@ -36,9 +36,9 @@ function buildActionFooter(liffId: string | null, bookingId: number, templateTyp
     spacing: "sm",
     contents: [
       { type: "button", style: "primary", height: "sm", color: "#4A6741",
-        action: { type: "uri", label: `變更${templateType}時間`, uri: bookingActionUrl(liffId, "reschedule", bookingId) } },
+        action: { type: "uri", label: `變更${templateType}時間`, uri: bookingActionUrl(liffId, "reschedule", bookingId, projectId) } },
       { type: "button", style: "secondary", height: "sm",
-        action: { type: "uri", label: `取消${templateType}`, uri: bookingActionUrl(liffId, "cancel", bookingId) } },
+        action: { type: "uri", label: `取消${templateType}`, uri: bookingActionUrl(liffId, "cancel", bookingId, projectId) } },
     ],
     paddingAll: "16px",
   };
@@ -244,7 +244,7 @@ export async function handleRescheduleBooking(input: {
         headerColor: "#4A6741",
         altText: `已更新${template.templateType}時間 ${s.dateStr} ${s.timeStr}`,
         rows,
-        footer: buildActionFooter(template.liffId, record.id, template.templateType),
+        footer: buildActionFooter(template.liffId, record.id, template.templateType, template.projectId),
         note: template.liffId ? undefined : "如需再次變更或取消，請聯繫我們",
       }),
     ).catch(() => {});

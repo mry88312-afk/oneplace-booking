@@ -39,10 +39,16 @@ curl -fsS "http://127.0.0.1:$ap/healthz" | grep -q 'oneplace-booking'
 public="/var/www/one824-$tag"; install -d -m755 "$public"
 install -m644 "$src/deposit-public-956f2f0-02/gate/liff-sdk.js" "$public/liff-sdk.js"
 install -m644 "$r/src/deploy/gcp/pilot.html" "$public/index.html"
-sed "s/PILOT_LIFF/$liff/g" "$r/src/deploy/gcp/pilot.js" > "$public/pilot.js"; chmod 644 "$public/pilot.js"
+docker run --rm --network none --read-only "one824-booking-qa:$tag" node_modules/.bin/esbuild deploy/gcp/pilot.js --bundle --platform=browser > "$r/pilot.bundle.js"
+sed "s/PILOT_LIFF/$liff/g" "$r/pilot.bundle.js" > "$public/pilot.js"; chmod 644 "$public/pilot.js"
 sed -e "s/BOOKING_PORT/$ap/g;s/GATE_PORT/$gp/g;s|PILOT_FILES|$public|g" "$r/src/deploy/gcp/owner-preview.caddy" > "$r/pilot.caddy"
 if ! cmp -s "$site" "$r/pilot.caddy"; then
-  cmp "$site" /srv/oneplace-trials-820-823-824/private-https/booking.caddy || { echo 'Booking ingress changed; check before replacing'; exit 1; }
+  previous=/srv/oneplace-trials-820-823-824/private-https/booking.caddy
+  if [[ -n "${3:-}" ]]; then
+    [[ "$3" =~ ^[0-9a-f]{12}$ ]]
+    previous="/srv/one824-booking-20261110/releases/$3/pilot.caddy"
+  fi
+  cmp "$site" "$previous" || { echo 'Booking ingress changed; check before replacing'; exit 1; }
   cp -p "$site" "$r/before-pilot.caddy"
   restore(){ install -m644 "$r/before-pilot.caddy" "$site"; systemctl reload caddy; }
   trap restore ERR
@@ -54,7 +60,11 @@ url=https://booking.oneplace.com.tw
 check(){ curl -sS --retry 2 --retry-all-errors --max-time 5 --resolve booking.oneplace.com.tw:443:127.0.0.1 -o /dev/null -w '%{http_code}' "$@"; }
 test "$(check "$url/")" = 200
 test "$(check -H 'Origin: https://booking.oneplace.com.tw' -X POST "$url/api/trpc/booking.confirmBooking")" = 403
-test "$(check -H 'Origin: https://booking.oneplace.com.tw' -X POST "$url/booking-link/send-otp")" = 403
+for endpoint in send-otp verify-otp; do
+  response=$(curl -sS --max-time 5 --resolve booking.oneplace.com.tw:443:127.0.0.1 -H 'Origin: https://booking.oneplace.com.tw' -H 'Content-Type: application/json' --data '{}' -o "$r/otp-denial.json" -w '%{http_code}' "$url/booking-link/$endpoint")
+  test "$response" = 403
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["success"] is False' "$r/otp-denial.json"
+done
 test "$(check -H 'Origin: https://other.example' -X POST "$url/booking-link/line-session")" = 403
 test "$(check "$url/api/outreach/run")" = 404
 trap - ERR
