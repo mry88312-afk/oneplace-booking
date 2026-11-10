@@ -24,7 +24,7 @@ const status = "GET /api/check-status?batch_code=B1&filename=report.xlsx";
 const acceptedBatch = () => Response.json({ success: true, data: { batch_code: "B1", filename: "report.xlsx" } });
 const readyReport = () => Response.json({ success: true, data: { process: 100, url: "https://img.jgbsmart.com/fixture.xlsx" } });
 
-for (const scenario of ["primary", "health-down", "cert-unavailable", "connect-refused", "status-down"] as const) {
+for (const scenario of ["primary", "health-down", "cert-unavailable", "connect-refused", "status-down", "slow-progress", "stalled"] as const) {
   test(`報表主備：${scenario}，同一批次完成下載與解析`, async t => {
     const workbook = new ExcelJS.Workbook();
     workbook.addWorksheet("帳務報表").addRows(exportFixture());
@@ -33,6 +33,12 @@ for (const scenario of ["primary", "health-down", "cert-unavailable", "connect-r
       assert.equal(url.href, "https://img.jgbsmart.com/fixture.xlsx");
       return new Response(Buffer.from(bytes));
     });
+    let pendingPolls = 0;
+    if (scenario === "slow-progress" || scenario === "stalled") {
+      const timeout = globalThis.setTimeout;
+      t.mock.method(globalThis, "setTimeout", (fn: () => void, delay: number, ...args: unknown[]) =>
+        Reflect.apply(timeout, globalThis, [fn, delay === 3000 ? 0 : delay, ...args]));
+    }
     const fixture = routeFixture(async (site, path, body) => {
       if (path === "/machine-health") {
         if (scenario === "cert-unavailable") throw new Error("missing certificate");
@@ -44,6 +50,10 @@ for (const scenario of ["primary", "health-down", "cert-unavailable", "connect-r
         return acceptedBatch();
       }
       if (scenario === "status-down" && site === "OnePlace") return new Response(null, { status: 502 });
+      if (site === "OnePlace" && scenario === "slow-progress" && pendingPolls++ < 10)
+        return Response.json({ success: true, data: { process: pendingPolls * 5 } });
+      if (site === "OnePlace" && scenario === "stalled")
+        return Response.json({ success: true, data: { process: 0 } });
       return readyReport();
     });
     const report = await fixture.run();
@@ -54,6 +64,8 @@ for (const scenario of ["primary", "health-down", "cert-unavailable", "connect-r
       "health-down": [health, `Zeabur ${post}`, `Zeabur ${status}`],
       "cert-unavailable": [health, `Zeabur ${post}`, `Zeabur ${status}`],
       "connect-refused": [health, `OnePlace ${post}`, `Zeabur ${post}`, `Zeabur ${status}`],
+      "slow-progress": [health, `OnePlace ${post}`, ...Array(11).fill(`OnePlace ${status}`)],
+      stalled: [health, `OnePlace ${post}`, ...Array(9).fill(`OnePlace ${status}`), `Zeabur ${status}`],
       "status-down": [health, `OnePlace ${post}`, `OnePlace ${status}`, `Zeabur ${status}`],
     };
     assert.deepEqual(fixture.calls, expected[scenario]);
