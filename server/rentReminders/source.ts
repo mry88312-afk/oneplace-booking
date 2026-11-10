@@ -21,12 +21,23 @@ async function machinePem(): Promise<string> {
     if (!result.data.payload?.data) throw new Error("Missing client identity");
     return Buffer.from(result.data.payload.data, "base64").toString("utf8");
   } catch {
-    throw new Error("JGB 備援憑證讀取失敗");
+    throw new Error("JGB OnePlace 憑證讀取失敗");
   }
 }
 
-export async function checkJgbFallback(): Promise<boolean> {
-  const response = await machineResponse("/machine-health", await machinePem());
+type ReportRequest = (path: string, body?: object) => Promise<Response>;
+
+function onePlaceClient(): ReportRequest {
+  let certificate: string | undefined;
+  return async (path, body) => {
+    certificate ??= await machinePem();
+    return machineResponse(path, certificate, body);
+  };
+}
+
+export async function checkJgbFallback(onePlace = onePlaceClient()): Promise<boolean> {
+  // The existing health header reports reachability of the OnePlace machine interface.
+  const response = await onePlace("/machine-health");
   return response.status === 204;
 }
 
@@ -34,7 +45,7 @@ function machineResponse(path: string, pem: string, body?: object): Promise<Resp
   return new Promise((resolve, reject) => {
     const req = request(MACHINE_ORIGIN + path, {
       method: body ? "POST" : "GET", cert: pem, key: pem,
-      headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+      headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(path === "/machine-health" ? 5000 : 30000),
     }, res => {
       const chunks: Buffer[] = [];
       let size = 0;
@@ -126,49 +137,53 @@ export async function parseWorkbook(bytes: ArrayBuffer): Promise<Bill[]> {
   });
   return parseRows(rows);
 }
-export async function fetchCurrentBills() {
+const zeaburRequest: ReportRequest = (path, body) => fetch(LEGACY_ORIGIN + path, {
+  method: body ? "POST" : "GET", redirect: "error", headers: { "Content-Type": "application/json" },
+  body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30000),
+});
+
+function failedBeforeConnect(error: unknown): boolean {
+  // node:https reports DNS/TCP failures directly. Timeouts and resets may occur after delivery.
+  return error instanceof Error && "code" in error &&
+    ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(String(error.code));
+}
+
+export async function fetchCurrentBills(onePlace = onePlaceClient(), zeabur = zeaburRequest) {
   const started = Date.now();
-  let identity: Promise<string> | undefined;
-  let useMachine = false;
-  try {
-    const response = await fetch(LEGACY_ORIGIN + "/openapi.json", {
-      redirect: "error", signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error("舊站暫時無法使用");
-    const schema = await response.json();
-    useMachine = !schema?.paths?.["/api/export-bills"]?.post || !schema?.paths?.["/api/check-status"]?.get;
-  } catch {
-    useMachine = true;
-  }
+  let machine = await checkJgbFallback(onePlace).catch(() => false);
+  const read = async (path: string, body?: object) => {
+    const response = await (machine ? onePlace : zeabur)(path, body);
+    if (!response.ok) throw new Error(`JGB 匯出服務 HTTP ${response.status}`);
+    return response.json();
+  };
   const fetchJson = async (path: string, body?: object) => {
-    const transport = async () => useMachine ? machineResponse(path, await (identity ??= machinePem()), body) : fetch(LEGACY_ORIGIN + path, { method: body ? "POST" : "GET", redirect: "error",
-      headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(30000) });
-    const read = async () => {
-      const response = await transport();
-      if (!response.ok) throw new Error(`JGB 匯出服務 HTTP ${response.status}`);
-      return response.json();
-    };
     try {
-      return await read();
+      return await read(path, body);
     } catch (err) {
-      const cause = err instanceof Error ? err.cause : undefined;
-      const beforeSend = cause && typeof cause === "object" && "code" in cause &&
-        ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT"].includes(String(cause.code));
-      // A lost POST response can conceal a successful job. GET can resume the same batch.
-      if (useMachine || (body && !beforeSend)) throw err;
-      useMachine = true;
-      return read();
+      // POST can switch only from the primary after a proven pre-connect failure.
+      // A status GET is safe on the other host using the acknowledged batch.
+      if (body && (!machine || !failedBeforeConnect(err))) throw err;
+      machine = !machine;
+      console.warn(`[jgb-report] switching to ${machine ? "OnePlace" : "Zeabur"} for ${body ? "export" : "status"}`);
+      return read(path, body);
     }
   };
+  console.info(`[jgb-report] export via ${machine ? "OnePlace" : "Zeabur"}`);
   const task = await fetchJson("/api/export-bills", {
     date_type: "all", bill_type: "income", statuses: ["unreceived"], async_mode: true,
   });
   if (task?.success !== true || !task.data?.batch_code || !task.data?.filename) throw new Error("JGB 未建立匯出批次");
   const batch = String(task.data.batch_code);
+  let lastProgress = -1;
+  let lastProgressAt = Date.now();
+  let stalledPolls = 0;
+  let checkedAlternate = false;
   for (let attempt = 0; attempt < 24 && Date.now() - started < 120000; attempt++) {
-    // Reserve part of the polling window for the same acknowledged batch on GCP.
-    if (attempt >= 8 || Date.now() - started >= 45000) useMachine = true;
+    // A stalled job may finish on the other host. Switch once, retaining the same batch.
+    if (!checkedAlternate && (stalledPolls >= 8 || Date.now() - lastProgressAt >= 45000)) {
+      checkedAlternate = true;
+      machine = !machine;
+    }
     const state = await fetchJson(`/api/check-status?${new URLSearchParams({ batch_code: batch, filename: task.data.filename })}`);
     if (state?.success === true && Number(state.data?.process) === 100 && state.data?.url) {
       // Never read the shared latest_report.xlsx: other exports can overwrite it.
@@ -182,6 +197,14 @@ export async function fetchCurrentBills() {
       if (bytes.byteLength > 8_000_000) throw new Error("JGB 匯出檔案過大");
       return { bills: await parseWorkbook(bytes), fetchedAt: new Date(started), batch,
         digest: createHash("sha256").update(Buffer.from(bytes)).digest("hex") };
+    }
+    const progress = Number(state?.data?.process);
+    if (Number.isFinite(progress) && progress > lastProgress) {
+      lastProgress = progress;
+      lastProgressAt = Date.now();
+      stalledPolls = 0;
+    } else {
+      stalledPolls++;
     }
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
