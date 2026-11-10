@@ -17,7 +17,7 @@ test('writes require both an explicit switch and a fixed dataset', t => {
   assert.throws(() => assertBookingDataset('old-dataset'), { code: 'PRECONDITION_FAILED' });
   assert.doesNotThrow(() => assertBookingDataset('booking-fixture'));
   for (const action of ['cancel', 'reschedule'] as const) {
-    const url = new URL(bookingActionUrl('fixture-liff', action, 1));
+    const url = new URL(bookingActionUrl('fixture-liff', action, 1, 'contract'));
     assert.equal(url.searchParams.get('dataset'), 'booking-fixture');
     assert.equal(url.searchParams.get(action), '1');
   }
@@ -37,4 +37,19 @@ test('old cards cannot read, cancel or reschedule a reused numeric ID', async t 
     await assert.rejects(handlers.handleRescheduleBooking({ ...input, date: '2026-11-01', startTime: '', endTime: '', calendarId: '', assigneeName: '' }), { code: 'PRECONDITION_FAILED' });
   }
   assert.equal(externalCalls, 0);
+});
+
+test('the common LINE entry keeps type and the original record when opening a card', t => {
+  const old = { ...process.env };
+  t.after(() => { process.env = old; });
+  process.env.BOOKING_PREVIEW_LIFF_ID = 'common-id';
+  process.env.BOOKING_DATASET_ID = 'owner-test-dataset';
+  for (const project of ['renewal', 'checkout']) {
+    const url = new URL(bookingActionUrl('legacy-id', 'reschedule', 37, project));
+    assert.equal(url.pathname, '/common-id');
+    assert.deepEqual(Object.fromEntries(url.searchParams), { type: project, reschedule: '37', dataset: 'owner-test-dataset' });
+  }
+  const other = new URL(bookingActionUrl('legacy-id', 'cancel', 37, 'contract'));
+  assert.equal(other.pathname, '/legacy-id');
+  assert.equal(other.searchParams.has('type'), false);
 });
