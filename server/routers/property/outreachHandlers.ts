@@ -18,6 +18,7 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { claimOutreach } from "../../booking/claimOutreach";
 import { relayPush } from "./bookingConfirmHandler";
+import { projectIdsForBookingActions } from "../../config/bookingActions";
 import { rentHistory, previewRentReminders, setRentEnabled } from "../../rentReminders/service";
 
 type ScheduleRow = {
@@ -106,7 +107,7 @@ async function hasActiveBookingSuppress(tenantUid: string): Promise<boolean> {
       and(
         eq(schema.bookingRecords.tenantUid, tenantUid),
         eq(schema.bookingRecords.status, "confirmed"),
-        inArray(schema.bookingTemplates.contractAction, ["續約", "退租"]),
+        inArray(schema.bookingTemplates.projectId, projectIdsForBookingActions(["續約", "退租"])),
       ),
     )
     .limit(1);
@@ -372,8 +373,8 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
 
 /**
  * 預約前一日提醒掃描（每日台北 17:00 由 pg_cron 經 pg_net 呼叫）：
- * 掃 TiDB「台北明天」某 contractAction 的 confirmed 預約 → 排入今天 18:00（台北）的提醒；dedupe_key 擋重複。
- * 退租、續約共用此邏輯，只差 contractAction 與規則卡（ruleKey）。
+ * 掃預約庫「台北明天」某動作（以模板代號辨識，見 config/bookingActions）的 confirmed 預約 → 排入今天 18:00（台北）的提醒；dedupe_key 擋重複。
+ * 退租、續約共用此邏輯，只差動作與規則卡（ruleKey）。
  */
 async function scanBookingDayBeforeReminders(
   action: "退租" | "續約",
@@ -403,7 +404,7 @@ async function scanBookingDayBeforeReminders(
     .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
     .where(
       and(
-        eq(schema.bookingTemplates.contractAction, action),
+        inArray(schema.bookingTemplates.projectId, projectIdsForBookingActions([action])),
         eq(schema.bookingRecords.status, "confirmed"),
         gte(schema.bookingRecords.bookingTime, tomorrowTpMidnightUtcMs),
         lt(schema.bookingRecords.bookingTime, endMs),
@@ -595,7 +596,7 @@ async function scanRenewalDueList(thresholdDays: number) {
         .select({ uid: schema.bookingRecords.tenantUid })
         .from(schema.bookingRecords)
         .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
-        .where(and(eq(schema.bookingRecords.status, "confirmed"), inArray(schema.bookingTemplates.contractAction, ["續約", "退租"])));
+        .where(and(eq(schema.bookingRecords.status, "confirmed"), inArray(schema.bookingTemplates.projectId, projectIdsForBookingActions(["續約", "退租"]))));
       booked = new Set(rows.map((r: any) => r.uid).filter(Boolean));
     }
   } catch (e: any) {
