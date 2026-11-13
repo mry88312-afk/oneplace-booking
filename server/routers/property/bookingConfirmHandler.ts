@@ -914,7 +914,7 @@ export async function handleConfirmBooking(
                       action: {
                         type: "uri",
                         label: `變更${template.templateType}時間`,
-                        uri: bookingActionUrl(template.liffId, "reschedule", record.insertId),
+                        uri: bookingActionUrl(template.liffId, "reschedule", record.insertId, template.projectId),
                       },
                     },
                     {
@@ -924,7 +924,7 @@ export async function handleConfirmBooking(
                       action: {
                         type: "uri",
                         label: `取消${template.templateType}`,
-                        uri: bookingActionUrl(template.liffId, "cancel", record.insertId),
+                        uri: bookingActionUrl(template.liffId, "cancel", record.insertId, template.projectId),
                       },
                     },
                   ],

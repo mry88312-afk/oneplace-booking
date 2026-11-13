@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2, Wallet, ShieldCheck } from "lucide-react";
 import { BookingContainer } from "./utils";
+import { ensureBookingSession } from "@/lib/renewalSession";
 import { createRemittanceFlow } from "@/lib/remittanceFlow";
 
 // 你現有的 tenant-form-liff（匯訂）服務公開網址；機密邏輯都在這台。
@@ -29,6 +30,7 @@ const REMITTANCE_API =
   "https://deposit.zeabur.app/api"; // tenant-form-liff（匯訂）正式服務
 
 async function postJson(path: string, body: any): Promise<any> {
+  await ensureBookingSession();
   const resp = await fetch(`${REMITTANCE_API}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -43,7 +45,7 @@ async function postJson(path: string, body: any): Promise<any> {
 }
 
 interface RemittanceViewProps {
-  template: any;
+  template: { lineRenewal?: boolean };
   /** 驗證後帶入的姓名（顯示用） */
   name: string;
   /** 驗證後帶入的電話（產 VA / 發 OTP 用） */
@@ -55,10 +57,10 @@ interface RemittanceViewProps {
   /** LINE userId（推虛擬帳號卡片用） */
   uid: string | null;
   /** 完成後續約流程繼續（回到 calendar / preset form），帶回虛擬帳號供確認卡顯示 */
-  onComplete: (virtualAccount?: string) => void;
+  onComplete: (virtualAccount?: string, name?: string) => void;
 }
 
-export function RemittanceView({ name, phone, existingEmail = "", existingJob = "", uid, onComplete }: RemittanceViewProps) {
+export function RemittanceView({ template, name, phone, existingEmail = "", existingJob = "", uid, onComplete }: RemittanceViewProps) {
   const normalizedPhone = (phone || "").replace(/\D/g, "");
   const [sub, setSub] = useState<"form" | "otp" | "processing">("form");
 
@@ -69,6 +71,24 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
   const [emailVal, setEmailVal] = useState(existingEmail);
   useEffect(() => { setNameVal(name); }, [name]);
   useEffect(() => { setEmailVal(existingEmail); }, [existingEmail]);
+  const lineRenewal = Boolean(template.lineRenewal);
+  const saveProfile = trpc.booking.saveRenewalProfile.useMutation();
+  const continueBooking = async () => {
+    const updatedName = nameVal.trim();
+    const updatedJob = job.trim();
+    if (!updatedName || !updatedJob) return toast.error('請填寫姓名及職業');
+    try {
+      await ensureBookingSession();
+      await saveProfile.mutateAsync({
+        ...(updatedName !== name.trim() && { name: updatedName }),
+        ...(emailVal.trim() !== existingEmail.trim() && { email: emailVal.trim() }),
+        ...(updatedJob !== existingJob.trim() && { job: updatedJob }),
+      });
+      onComplete(undefined, updatedName);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '資料儲存失敗，請重試');
+    }
+  };
   const submitRemittance = trpc.booking.submitRenewalRemittance.useMutation();
   const completeRemittance = trpc.booking.completeRenewalRemittance.useMutation();
   const statusRemittance = trpc.booking.getRenewalRemittance.useMutation();
@@ -78,7 +98,7 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
   const mounted = useRef(true);
   const completed = useRef(false);
   const flowRef = useRef<ReturnType<typeof createRemittanceFlow> | null>(null);
-  if (!flowRef.current) {
+  if (!lineRenewal && !flowRef.current) {
     flowRef.current = createRemittanceFlow({
       getItem: key => window.sessionStorage.getItem(key),
       setItem: (key, value) => window.sessionStorage.setItem(key, value),
@@ -224,7 +244,7 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
   resumeRef.current = handleVerify;
   useEffect(() => {
     mounted.current = true;
-    if (flowRef.current!.hasSaved()) {
+    if (!lineRenewal && flowRef.current?.hasSaved()) {
       setSub('processing');
       void resumeRef.current();
     }
@@ -254,7 +274,7 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
               <Wallet className="h-7 w-7 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-gray-900 mb-1">更新個人資料</h1>
-            <p className="text-sm text-gray-500">完成付款設定，取得中信專屬固定式匯款帳號</p>
+            <p className="text-sm text-gray-500">{lineRenewal ? '請確認職業及聯絡資料後繼續預約。' : '完成付款設定，取得中信專屬固定式匯款帳號'}</p>
           </div>
           <div className="space-y-4">
             {/* 姓名 / Email 預帶入但可編輯；手機為驗證身分用，鎖定不可改 */}
@@ -266,7 +286,7 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
               <Label className="text-sm font-medium text-gray-700">手機號碼</Label>
               <div className="mt-1.5 h-11 flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3">
                 <span className="font-semibold text-gray-900">{normalizedPhone || "—"}</span>
-                <span className="text-xs text-gray-400">驗證用，不可修改</span>
+                <span className="text-xs text-gray-400">{lineRenewal ? '已登記，不可修改' : '驗證用，不可修改'}</span>
               </div>
             </div>
             <div>
@@ -278,10 +298,10 @@ export function RemittanceView({ name, phone, existingEmail = "", existingJob = 
               <Input value={job} onChange={(e) => setJob(e.target.value)} className="mt-1.5 h-11" placeholder="例：軟體工程師" />
             </div>
             <Button className="w-full h-12 bg-[#6B8E6B] hover:bg-[#5A7A5A] text-white rounded-full font-semibold text-base"
-              onClick={handleSendOtp} disabled={sending}>
-              {sending ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />發送中...</>) : "發送驗證碼"}
+              onClick={lineRenewal ? continueBooking : handleSendOtp} disabled={sending || saveProfile.isPending}>
+              {sending ? (<><Loader2 className="h-4 w-4 animate-spin mr-2" />發送中...</>) : lineRenewal ? (saveProfile.isPending ? "儲存中…" : "繼續預約") : "發送驗證碼"}
             </Button>
-            <p className="text-xs text-gray-400 text-center">我們將發送簡訊驗證碼至上方手機號碼以確認身份</p>
+            {!lineRenewal && <p className="text-xs text-gray-400 text-center">我們將發送簡訊驗證碼至上方手機號碼以確認身份</p>}
           </div>
         </div>
       </BookingContainer>
