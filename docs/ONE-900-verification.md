@@ -17,3 +17,17 @@ booking 來源提醒發送前，使用模板 ragicTaskPath 與預約 ragicRecord
 尚未部署或做自然排程驗收。GCP 發布線與 main 分歧，需在當時正式發布版本另行整合並驗證，禁止直接以 main 覆蓋正式站。回復本次程式可 revert 修正 commit，無 migration。已略過的提醒不得自動重播，需另行核對。
 
 完整 npm test：113 項，111 通過、1 略過（缺少專用 fixture DB）、1 失敗。失敗檔 deploy/gcp/renewal-gateway.test.cjs 在載入階段找不到容器絕對路徑 /app/node_modules/express，另依賴 /gate/line-session.cjs；未修改該檔，需在專用容器驗證，不能宣稱全綠。
+
+## 2026-11-17 GCP 發布結果
+
+PR #23 與補正單筆回應格式的 PR #24 均已合併。正式發布以 a8a77f5717b0 為基底，加入 5249349、c1e6428 的修正；實際程式版本 d04977b2784d。
+
+發布線第一輪 13 項相關測試通過；補正後 10 項任務查核測試全通過，型別檢查與後端打包成功。完整測試的容器路徑限制仍如上，未宣稱全套全綠。
+
+候選正式容器使用相同金鑰與修正 helper 唯讀查詢：1046=false、1047=false、1053=true；無發送訊息或異動預約。正式容器 /app/dist/index.js SHA-256：44a225cc8e4b2d8de32d3ece570d8bd753dff1a99bb91c297b808fd9c0c29d03，與本機建置一致。
+
+正式環境變數與掛載全部相同，登入閘道維持原 one899-line-a8a77f5717b0。Caddy 僅將四處 app 上游改為 32803 與更新版本標頭。設定驗證、切換後 /healthz、/book/checkout、/book/renewal 均 HTTP 200 並回新版標頭；登入閘道無身分 /principal 仍 403。新容器 running、restart=0。
+
+主機證據：/srv/one900-booking/d04977b2784d/receipt.json、before.caddy、candidate.caddy、release-tests.log。回復：還原此 before.caddy 至 /etc/caddy/sites/booking.caddy，驗證後 reload Caddy；舊正式容器仍保留。
+
+未驗收：自然排程實際執行、LINE 實際收件、登入後畫面。本次未手動重播提醒。舊補正前候選 f45b823a08b2 不採用，勿復原。
