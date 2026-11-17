@@ -108,7 +108,7 @@ export function BookingCalendar({
                     className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all relative cursor-pointer
                       ${isSelected ? "bg-[#6B8E6B] text-white shadow-md" : "text-[#6B8E6B] hover:bg-[#6B8E6B]/10"}
                       ${cell.isToday && !isSelected ? "ring-2 ring-[#6B8E6B] ring-offset-1" : ""}`}
-                    onClick={() => onSelectDate(cell.date)}>
+                    data-lt-click="選日期" onClick={() => onSelectDate(cell.date)}>
                     {cell.day}
                     {!isSelected && <span className="absolute bottom-1 w-1 h-1 rounded-full bg-[#6B8E6B]" />}
                   </button>

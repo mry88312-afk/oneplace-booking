@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -751,6 +752,11 @@ export default function BookingPublic() {
     };
   }, []);
 
+  const flowName = isActionMode ? null : projectId === 'renewal' ? '續約' : projectId === 'checkout' ? '退租' : null;
+  const mark = (step: string, node: ReactElement, done = false) => flowName
+    ? <div key={step} data-lt-flow={flowName} data-lt-section={step} {...(done ? { 'data-lt-goal': `${flowName}預約完成` } : { 'data-lt-step': step })}>{node}</div>
+    : node;
+
   // Render
   if (entryClosed) return <BookingErrorScreen title="此續約入口已停止新預約" message={CONTRACT_ENTRY_CLOSED} actionHref="https://liff.line.me/2006833424-znZYKjip" actionLabel="前往線上續約" />;
   if (templateQuery.isLoading) return <BookingLoadingScreen />;
@@ -767,16 +773,16 @@ export default function BookingPublic() {
     const missingBinding = verifyMutation.error?.message === "NEED_PHONE";
     return <BookingErrorScreen title={missingBinding ? "LINE 帳號尚未綁定" : "無法確認 LINE 身分"} message={missingBinding ? "請聯絡客服協助綁定後，再重新開啟預約連結。" : "請從 LINE 重新開啟預約連結，若仍無法登入請聯絡客服。"} />;
   }
-  if (view === "verify") return <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />;
-  if (view === "phone") return <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />;
-  if (view === "register") return <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />;
-  if (view === "selectRoom") return <SelectRoomView templateType={template.templateType} residences={residences} onPick={handlePickResidence} />;
-  if (view === "remittance") return <RemittanceView key={`${lineUserId || uid || ''}:${verifiedPhone || phoneInput}`} template={template} name={tenantName} phone={verifiedPhone || phoneInput} existingEmail={verifiedEmail} existingJob={verifiedJob} uid={lineUserId || uid} onComplete={continueAfterRemittance} />;
-  if (view === "calendar") return <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />;
-  if (view === "slots") return <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} isBooking={isBooking} />;
-  if (view === "instruction" && confirmedSlot) return <InstructionView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} onNext={handleInstructionNext} setView={setView} setConfirmedSlot={setConfirmedSlot} />;
-  if (view === "form" && confirmedSlot) return <FormView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} formAnswers={formAnswers} setFormAnswers={setFormAnswers} fileUploads={fileUploads} setFileUploads={setFileUploads} isUploading={isUploading} isBooking={isBooking} handleFileUpload={handleFileUpload} handleConfirmBooking={handleConfirmBooking} setView={setView} setConfirmedSlot={setConfirmedSlot} isPreset={isPresetMode} renewalWindow={renewalWindow} renewalEndDate={renewalEndDate} setRenewalEndDate={setRenewalEndDate} />;
-  if (view === "success" && bookingResult?.success) return <SuccessView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} selectedSlot={selectedSlot} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} calendarOwner={calendarOwner} />;
+  if (view === "verify") return mark('身分確認', <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />);
+  if (view === "phone") return mark('電話驗證', <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />);
+  if (view === "register") return mark('補登資料', <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />);
+  if (view === "selectRoom") return mark('選房間', <SelectRoomView templateType={template.templateType} residences={residences} onPick={handlePickResidence} />);
+  if (view === "remittance") return mark('匯款資料', <RemittanceView key={`${lineUserId || uid || ''}:${verifiedPhone || phoneInput}`} template={template} name={tenantName} phone={verifiedPhone || phoneInput} existingEmail={verifiedEmail} existingJob={verifiedJob} uid={lineUserId || uid} onComplete={continueAfterRemittance} />);
+  if (view === "calendar") return mark('選日期', <CalendarViewPage template={template} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} selectedDate={selectedDate} onSelectDate={handleSelectDate} availableDays={availableDays} datesWithSlots={datesWithSlots} multiDayLoaded={!!multiDayQuery.data} multiDayLoading={multiDayQuery.isLoading} />);
+  if (view === "slots") return mark('選時段', <SlotsView template={template} selectedDate={selectedDate} selectedSlot={selectedSlot} slotsQuery={slotsQuery} onSelectSlot={handleSelectSlot} onConfirmSlot={handleConfirmSlot} setView={setView} setSelectedSlot={setSelectedSlot} isBooking={isBooking} />);
+  if (view === "instruction" && confirmedSlot) return mark('注意事項', <InstructionView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} onNext={handleInstructionNext} setView={setView} setConfirmedSlot={setConfirmedSlot} />);
+  if (view === "form" && confirmedSlot) return mark('填寫資料', <FormView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} calendarOwner={calendarOwner} formAnswers={formAnswers} setFormAnswers={setFormAnswers} fileUploads={fileUploads} setFileUploads={setFileUploads} isUploading={isUploading} isBooking={isBooking} handleFileUpload={handleFileUpload} handleConfirmBooking={handleConfirmBooking} setView={setView} setConfirmedSlot={setConfirmedSlot} isPreset={isPresetMode} renewalWindow={renewalWindow} renewalEndDate={renewalEndDate} setRenewalEndDate={setRenewalEndDate} />);
+  if (view === "success" && bookingResult?.success) return mark('預約完成', <SuccessView template={template} selectedDate={selectedDate} confirmedSlot={confirmedSlot} selectedSlot={selectedSlot} tenantName={tenantName} roomNumber={roomNumber} propertyName={propertyName} address={address} calendarOwner={calendarOwner} />, true);
 
   return null;
 }

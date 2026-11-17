@@ -28,6 +28,8 @@ export function bookingLoginRedirect(origin: string, projectId: string, params: 
     const t = params.get('t') || '';
     if (/^(\d{8}|\d{12})$/.test(t)) url.searchParams.set('t', t);
   }
+  const src = params.get('src') || '';
+  if (/^[a-zA-Z0-9_-]{1,30}$/.test(src)) url.searchParams.set('src', src);
   return url.toString();
 }
 
