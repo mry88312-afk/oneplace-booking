@@ -17,6 +17,7 @@ import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { claimOutreach } from "../../booking/claimOutreach";
+import { reminderTaskExists } from "../../booking/reminderTask";
 import { relayPush } from "./bookingConfirmHandler";
 import { projectIdsForBookingActions } from "../../config/bookingActions";
 import { rentHistory, previewRentReminders, setRentEnabled } from "../../rentReminders/service";
@@ -249,14 +250,25 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         const bid = Number(row.vars?.booking_id);
         const db = await getDb();
         const bk = db && bid
-          ? await db.select({ status: schema.bookingRecords.status, bookingTime: schema.bookingRecords.bookingTime })
-              .from(schema.bookingRecords).where(eq(schema.bookingRecords.id, bid)).limit(1)
+          ? await db.select({ status: schema.bookingRecords.status, bookingTime: schema.bookingRecords.bookingTime,
+              ragicRecordId: schema.bookingRecords.ragicRecordId, ragicTaskPath: schema.bookingTemplates.ragicTaskPath })
+              .from(schema.bookingRecords)
+              .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
+              .where(eq(schema.bookingRecords.id, bid)).limit(1)
           : [];
         const ok = bk.length > 0 && bk[0].status === "confirmed" && taipeiYmd(bk[0].bookingTime) === String(row.vars?.booking_date || "");
         if (!ok) {
           await sbQuery(
             `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
             [row.id, "退租預約已取消或已改期（發送前再驗）"],
+          );
+          result.skipped++;
+          continue;
+        }
+        if (!await reminderTaskExists(bk[0].ragicTaskPath, bk[0].ragicRecordId || '')) {
+          await sbQuery(
+            `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
+            [row.id, 'Ragic 預約任務已不存在（發送前查核）'],
           );
           result.skipped++;
           continue;
