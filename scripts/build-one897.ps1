@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $previous = $env:VITE_REMITTANCE_API_BASE
 try {
     $env:VITE_REMITTANCE_API_BASE = '/booking-link'
