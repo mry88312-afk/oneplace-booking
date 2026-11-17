@@ -1,4 +1,4 @@
-import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled } from "../../booking/runtime";
+import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled, commonBookingLiff, commonBookingUrl } from "../../booking/runtime";
 import { BOOKING_UNAVAILABLE } from "../../../shared/bookingErrors";
 import { assertNewBookingAllowed, assertTemplateAccess } from "../../booking/projectAccess";
 /**
@@ -15,7 +15,8 @@ import * as schema from "../../../drizzle/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { remittanceOwnerSchema, remittanceReceiptSchema } from "../../../shared/remittance";
-import { renewalRemittanceService } from "../../booking/remittance";
+import { bindingHelp, renewalProfileChanges, renewalProfileStore, usesLineRenewal } from "../../booking/renewalProfile";
+import { bookingLinePrincipal, renewalRemittanceService } from "../../booking/remittance";
 import {
   handleGetAvailableSlots,
   handleGetAvailableSlotsMultiDay,
@@ -46,27 +47,54 @@ const bookingActionContextSchema = z.object({
   datasetId: z.string().max(80).optional(),
 });
 
+// On the public GCP service bind client input (including card actions in batches)
+// to LINE's server-verified identity. The initial template lookup precedes login.
+const tenantProcedure = publicProcedure.use(async ({ ctx, path, getRawInput, next }) => {
+  if (!process.env.BOOKING_PUBLIC_LIFF_ID) return next();
+  const raw = await getRawInput();
+  const obj = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  if (path === 'booking.getPublicTemplate' && !obj.bookingContext) return next();
+  const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+  const context = obj.bookingContext;
+  if ((obj.uid !== undefined && obj.uid !== uid) ||
+      (context && typeof context === 'object' && 'uid' in context && context.uid !== uid)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'LINE 身分與預約不符' });
+  }
+  return next();
+});
+
 export const bookingRouter = router({
-  submitRenewalRemittance: publicProcedure
+  saveRenewalProfile: tenantProcedure
+    .input(renewalProfileChanges)
+    .mutation(async ({ input, ctx }) => {
+      assertBookingWritesEnabled();
+      const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+      await (await renewalProfileStore()).save(uid, input);
+      return { success: true };
+    }),
+  submitRenewalRemittance: tenantProcedure
     .input(remittanceOwnerSchema.extend({ verifyToken: z.string().regex(/^[a-f0-9]{48}$/) }))
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
       assertBookingWritesEnabled();
-      return (await renewalRemittanceService()).submit(input);
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "請重新開啟續約預約" });
+      return (await renewalRemittanceService(ctx.req.headers.cookie)).submit(input);
     }),
-  getRenewalRemittance: publicProcedure
+  getRenewalRemittance: tenantProcedure
     .input(remittanceReceiptSchema.extend({ phone: z.string().regex(/^\d{8,15}$/) }))
     // POST keeps the receipt capability out of URLs, browser history and access logs.
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
-      return (await renewalRemittanceService()).status(input);
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "請重新開啟續約預約" });
+      return (await renewalRemittanceService(ctx.req.headers.cookie)).status(input);
     }),
-  completeRenewalRemittance: publicProcedure
+  completeRenewalRemittance: tenantProcedure
     .input(remittanceReceiptSchema.extend(remittanceOwnerSchema.shape).extend({ email: z.string().max(200).optional(), job: z.string().max(200).optional() }))
     .mutation(async ({ input, ctx }) => {
       ctx.res?.setHeader?.('Cache-Control', 'no-store');
       assertBookingWritesEnabled();
-      return (await renewalRemittanceService()).complete(input);
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "請重新開啟續約預約" });
+      return (await renewalRemittanceService(ctx.req.headers.cookie)).complete(input);
     }),
   // ─── 後台 admin API（需 x-admin-password）— P19a 從主系統搬入 ──────────────
 
@@ -74,10 +102,8 @@ export const bookingRouter = router({
   listTemplates: adminProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: BOOKING_UNAVAILABLE });
-    return db
-      .select()
-      .from(schema.bookingTemplates)
-      .orderBy(desc(schema.bookingTemplates.createdAt));
+    const templates = await db.select().from(schema.bookingTemplates).orderBy(desc(schema.bookingTemplates.createdAt));
+    return templates.map(template => ({ ...template, publicBookingUrl: commonBookingUrl(template.projectId) }));
   }),
 
   /** 取得單一模版（含分流規則和表單欄位） */
@@ -345,7 +371,7 @@ export const bookingRouter = router({
   // ─── 租客端公開 API ──────────────────────────────────────────────────────
 
   /** 取得預約模版公開資訊（租客端用） */
-  getPublicTemplate: publicProcedure
+  getPublicTemplate: tenantProcedure
     .input(z.object({ projectId: z.string(), bookingContext: bookingActionContextSchema.optional() }))
     .query(async ({ input }) => {
       await assertTemplateAccess(input.projectId, input.bookingContext);
@@ -381,7 +407,11 @@ export const bookingRouter = router({
         bookableDaysAhead: template.bookableDaysAhead,
         dailyStartTime: template.dailyStartTime,
         dailyEndTime: template.dailyEndTime,
-        liffId: template.liffId || null,
+        liffId: commonBookingLiff(template.projectId) || template.liffId || null,
+        lineRenewal: usesLineRenewal(template.projectId),
+        lineSessionRequired: Boolean(process.env.BOOKING_PUBLIC_LIFF_ID || process.env.BOOKING_PREVIEW_LIFF_ID),
+        boundTenantOnly: Boolean(process.env.BOOKING_PUBLIC_LIFF_ID),
+        ownerPreview: Boolean(process.env.BOOKING_PREVIEW_LIFF_ID),
         instructionEnabled: template.instructionEnabled,
         instructionText: template.instructionText || null,
         minLeadDays: template.minLeadDays ?? 0,
@@ -391,19 +421,23 @@ export const bookingRouter = router({
     }),
 
   /** 驗證租客 UID（公開 API）— 查 Ragic 房客資料取得入住房源 */
-  verifyTenantUid: publicProcedure
+  verifyTenantUid: tenantProcedure
     .input(
       z.object({
         projectId: z.string(),
         uid: z.string().min(1),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      if (usesLineRenewal(input.projectId)) {
+        const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+        return handleVerifyTenantUid({ ...input, uid });
+      }
       return handleVerifyTenantUid(input);
     }),
 
   /** 用電話號碼驗證租客（UID 查不到時的 fallback） */
-  verifyByPhone: publicProcedure
+  verifyByPhone: tenantProcedure
     .input(
       z.object({
         projectId: z.string(),
@@ -412,11 +446,12 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      if (process.env.BOOKING_PUBLIC_LIFF_ID || usesLineRenewal(input.projectId)) throw new TRPCError({ code: "FORBIDDEN", message: bindingHelp });
       return handleVerifyByPhone(input);
     }),
 
   /** 用電話號碼建立新的 Ragic 房客記錄（電話也查不到時） */
-  registerTenantByPhone: publicProcedure
+  registerTenantByPhone: tenantProcedure
     .input(
       z.object({
         projectId: z.string(),
@@ -428,6 +463,7 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      if (process.env.BOOKING_PUBLIC_LIFF_ID || usesLineRenewal(input.projectId)) throw new TRPCError({ code: "FORBIDDEN", message: bindingHelp });
       assertNewBookingAllowed(input.projectId);
       const { ragicPost, RAGIC_API_KEY_VALUE } = await import("./bookingHelpers");
       if (!RAGIC_API_KEY_VALUE) {
@@ -461,7 +497,7 @@ export const bookingRouter = router({
     }),
 
   /** 取得可用時段（公開 API） */
-  getAvailableSlots: publicProcedure
+  getAvailableSlots: tenantProcedure
     .input(
       z.object({
         projectId: z.string(),
@@ -474,7 +510,7 @@ export const bookingRouter = router({
     }),
 
   /** 確認預約（公開 API） */
-  confirmBooking: publicProcedure
+  confirmBooking: tenantProcedure
     .input(
       z.object({
         requestId: z.string().max(64).optional(),
@@ -500,11 +536,30 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      if (process.env.BOOKING_PUBLIC_LIFF_ID) {
+        const owner = await handleVerifyTenantUid({ projectId: input.projectId, uid: input.uid });
+        const rooms = owner.residences.length ? owner.residences :
+          [{ room: owner.roomNumber, contractNo: owner.contractNo, contractRecordId: owner.contractRecordId }];
+        const owned = rooms.filter(r => r.room === input.roomNumber &&
+          (!input.contractNo || r.contractNo === input.contractNo) &&
+          (input.contractRecordId == null || r.contractRecordId === input.contractRecordId));
+        if (owned.length !== 1) throw new TRPCError({ code: "FORBIDDEN", message: "請重新確認您的房間與合約" });
+        const room = owned[0];
+        const virtualAccount = usesLineRenewal(input.projectId) ? await (await renewalProfileStore()).existingAccount(input.uid) : undefined;
+        return handleConfirmBooking({ ...input, virtualAccount, tenantName: owner.tenantName, phone: owner.phone,
+          address: owner.address, contractNo: room.contractNo || undefined, contractRecordId: room.contractRecordId ?? undefined }, ctx);
+      }
+      if (usesLineRenewal(input.projectId)) {
+        const { uid } = await bookingLinePrincipal(ctx.req.headers.cookie);
+        if (uid !== input.uid) throw new TRPCError({ code: "FORBIDDEN", message: "請重新從 LINE 開啟預約" });
+        const virtualAccount = await (await renewalProfileStore()).existingAccount(uid);
+        return handleConfirmBooking({ ...input, uid, virtualAccount }, ctx);
+      }
       return handleConfirmBooking(input, ctx);
     }),
 
   /** 批次查詢多天可用時段（公開 API） */
-  getAvailableSlotsMultiDay: publicProcedure
+  getAvailableSlotsMultiDay: tenantProcedure
     .input(
       z.object({
         projectId: z.string(),
@@ -517,7 +572,7 @@ export const bookingRouter = router({
     }),
 
   /** 解析指定時段預約參數（公開 API） */
-  resolvePresetSlot: publicProcedure
+  resolvePresetSlot: tenantProcedure
     .input(
       z.object({
         projectId: z.string(),
@@ -602,7 +657,7 @@ export const bookingRouter = router({
    * 續約：把 deposit 產生的虛擬帳號（+可選 email/職業）寫回租客主檔 for-system-use/2。
    * 走預約後端的 Ragic 寫入，不需 idNumber（租客既有資料不覆蓋姓名/身分證）。
    */
-  writeRenewalVirtualAccount: publicProcedure
+  writeRenewalVirtualAccount: tenantProcedure
     .input(
       z.object({
         uid: z.string().optional(),
@@ -613,6 +668,7 @@ export const bookingRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      if (usesLineRenewal("renewal")) throw new TRPCError({ code: "FORBIDDEN", message: "續約不提供匯款帳號寫入" });
       const { ragicGet, ragicPut, RAGIC_API_KEY_VALUE } = await import("./bookingHelpers");
       if (!RAGIC_API_KEY_VALUE) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ragic API 尚未設定" });
@@ -641,17 +697,17 @@ export const bookingRouter = router({
   // ─── 預約卡片動作：取消 / 變更時間（P23，退租+續約共用）──────────────────
 
   /** 改期前取得預約基本資料（uid 比對） */
-  getBookingForReschedule: publicProcedure
+  getBookingForReschedule: tenantProcedure
     .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1), datasetId: z.string().max(80).optional() }))
     .query(async ({ input }) => handleGetBookingForReschedule(input)),
 
   /** 取消預約：硬刪除 Ragic 任務 + 標記取消（uid 比對） */
-  cancelBookingPublic: publicProcedure
+  cancelBookingPublic: tenantProcedure
     .input(z.object({ bookingId: z.number().int(), uid: z.string().min(1), datasetId: z.string().max(80).optional() }))
     .mutation(async ({ input }) => handleCancelBookingPublic(input)),
 
   /** 變更時間：更新 Ragic 任務日期 + 本地紀錄（uid 比對） */
-  rescheduleBooking: publicProcedure
+  rescheduleBooking: tenantProcedure
     .input(
       z.object({
         datasetId: z.string().max(80).optional(),

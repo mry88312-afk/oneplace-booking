@@ -1,0 +1,62 @@
+booking.oneplace.com.tw {
+    @wrongHost expression `{http.request.tls.server_name} != "booking.oneplace.com.tw"`
+    respond @wrongHost 421
+    header {
+        Cache-Control no-store
+        Referrer-Policy strict-origin
+        X-Content-Type-Options nosniff
+        X-OnePlace-Release RELEASE_TAG
+    }
+    @machine {
+        method POST
+        path /api/line/inbound /api/outreach/run /api/outreach/rent-reminders /api/outreach/scan-checkout /api/outreach/test-send /api/outreach/enqueue
+    }
+    handle @machine {
+        reverse_proxy 127.0.0.1:BOOKING_PORT
+    }
+    @feedback path /f/*
+    handle @feedback {
+        reverse_proxy 127.0.0.1:BOOKING_PORT
+    }
+    @entry {
+        method GET HEAD
+        path / /pilot.js /liff-sdk.js
+    }
+    handle @entry {
+        root * PILOT_FILES
+        file_server
+    }
+    @foreignPost {
+        not method GET HEAD OPTIONS
+        not header Origin https://booking.oneplace.com.tw
+    }
+    @session {
+        method POST
+        path /booking-link/line-session
+    }
+    handle @session {
+        route {
+            respond @foreignPost 403
+            rewrite * /line-session
+            reverse_proxy 127.0.0.1:GATE_PORT
+        }
+    }
+    @ui {
+        method GET HEAD
+        path /admin /book /book/* /assets/* /favicon.ico /healthz
+    }
+    handle @ui {
+        reverse_proxy 127.0.0.1:BOOKING_PORT
+    }
+    @api path /api/trpc/*
+    handle @api {
+        route {
+            respond @foreignPost 403
+            reverse_proxy 127.0.0.1:BOOKING_PORT
+        }
+    }
+    handle {
+        respond 404
+    }
+}
+

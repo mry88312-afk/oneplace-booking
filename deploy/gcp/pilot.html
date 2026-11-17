@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>一方生活預約</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f8f7f4; color: #242e34; font-family: system-ui, sans-serif; }
+    main { max-width: 28rem; margin: 12vh auto; padding: 1.5rem; }
+    h1 { font-size: 1.65rem; }
+    p { line-height: 1.6; }
+    a { display: block; margin-top: .8rem; padding: 1rem; border: 1px solid #647e66; border-radius: .65rem; background: white; color: #344f38; text-decoration: none; font-weight: 600; }
+    a:focus-visible { outline: 3px solid #344f38; outline-offset: 3px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>一方生活預約</h1>
+    <p id="status" role="status">正在開啟預約…</p>
+    <nav id="choices" aria-label="預約項目" hidden>
+      <a id="renewal">辦理續約</a>
+      <a id="checkout">預約退租點交</a>
+    </nav>
+  </main>
+  <script src="/liff-sdk.js"></script>
+  <script src="/pilot.js"></script>
+</body>
+</html>
