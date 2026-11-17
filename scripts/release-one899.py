@@ -48,6 +48,7 @@ def clone(old, name, image, gate_dir=None, bridge=None):
     host['PortBindings'] = {'3000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': ''}]}
     host['LogConfig'] = {'Type': 'json-file', 'Config': {'max-size': '4m', 'max-file': '3'}}
     if gate_dir:
+        host.pop('Mounts', None)
         host['Binds'] = [str(gate_dir) + ':/gate:ro']
     if bridge:
         assert sum(e.startswith('BOOKING_REMITTANCE_BRIDGE=') for e in config['Env']) == 1
