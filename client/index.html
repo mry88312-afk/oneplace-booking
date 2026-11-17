@@ -24,6 +24,15 @@
         document.head.appendChild(__s);
       }
     </script>
+    <script>
+      if (location.pathname.indexOf('/book/') === 0) {
+        var trackingScript = document.createElement('script');
+        trackingScript.async = true;
+        trackingScript.src = 'https://go.oneplace.com.tw/t.js';
+        trackingScript.setAttribute('data-site', 'st_bk7m2q9x4d');
+        document.head.appendChild(trackingScript);
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
