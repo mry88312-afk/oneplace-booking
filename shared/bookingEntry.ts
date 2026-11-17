@@ -1,5 +1,9 @@
 export const CONTRACT_ENTRY_CLOSED = '此續約入口已停止接受新預約，請使用線上續約入口。既有預約仍可從原確認卡改期或取消。';
 
+export function isBookingType(value: string | null): value is 'renewal' | 'checkout' {
+  return value === 'renewal' || value === 'checkout';
+}
+
 export function acceptsNewBookings(projectId: string): boolean {
   return projectId !== 'contract';
 }
