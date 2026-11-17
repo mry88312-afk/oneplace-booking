@@ -117,6 +117,7 @@ export function SelectRoomView({ templateType, residences, onPick }: SelectRoomV
           <div className="space-y-3">
             {residences.map((r, i) => (
               <button
+                data-lt-click="選擇房間"
                 key={r.contractNo || i}
                 type="button"
                 className="w-full text-left px-5 py-4 rounded-lg border-2 border-[#6B8E6B]/30 hover:border-[#6B8E6B] hover:bg-[#6B8E6B]/5 transition-all"
@@ -358,7 +359,7 @@ export function SlotsView({
                   <button type="button"
                     className={`flex-1 py-4 rounded-lg border-2 text-base font-bold transition-all
                       ${isSelected ? "border-[#6B8E6B] bg-[#6B8E6B]/5 text-[#6B8E6B]" : "border-[#6B8E6B]/30 text-[#6B8E6B] hover:border-[#6B8E6B] hover:bg-[#6B8E6B]/5"}`}
-                    onClick={() => onSelectSlot(slot)}>
+                    data-lt-click="選時段" onClick={() => onSelectSlot(slot)}>
                     {formatTime(slot.startTime)}
                   </button>
                   {isSelected && (
