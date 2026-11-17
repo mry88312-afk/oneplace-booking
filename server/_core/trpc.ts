@@ -5,7 +5,10 @@ import { publicErrorMessage } from "../../shared/bookingErrors";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
-  errorFormatter({ shape }) {
+  errorFormatter({ shape, path }) {
+    if (path?.startsWith('booking.')) {
+      console.warn('[Booking-Request-Rejected]', { procedure: path, code: shape.data.code });
+    }
     const { stack: _stack, ...data } = shape.data;
     return { ...shape, message: publicErrorMessage(shape.message, shape.data.code), data };
   },

@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { verificationFetch } from "@/lib/verificationFetch";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
@@ -36,6 +37,14 @@ queryClient.getMutationCache().subscribe((event) => {
  * 並對 5xx/rate-limit 自動重試（指數退避，最多 2 次）
  */
 async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const procedures = String(input).split('/api/trpc/')[1]?.split('?')[0]?.split(',') || [];
+  if (procedures.length && procedures.every(p => p === 'booking.verifyTenantUid' || p === 'booking.verifyByPhone')) {
+    return verificationFetch(signal => safeFetchResponse(input, { ...init, signal }), init?.signal);
+  }
+  return safeFetchResponse(input, init);
+}
+
+async function safeFetchResponse(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   let resp: Response;
   try {
     resp = await globalThis.fetch(input, {

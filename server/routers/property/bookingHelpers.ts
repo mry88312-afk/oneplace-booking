@@ -77,16 +77,43 @@ export async function ragicGet(ragicPath: string, params?: Record<string, string
   const url = new URL(`${BASE}/${APP}/${ragicPath}`);
   url.searchParams.set("v", "3");
   url.searchParams.set("api", "");
+  url.searchParams.set("naming", "EID");
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
     }
   }
-  const resp = await fetch(url.toString(), {
-    headers: { Authorization: `Basic ${RAGIC_API_KEY}` },
-  });
-  if (!resp.ok) throw new Error(`Ragic API error: ${resp.status}`);
-  return resp.json();
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const started = Date.now();
+    let status: number | undefined;
+    try {
+      const resp = await fetch(url.toString(), {
+        headers: { Authorization: `Basic ${RAGIC_API_KEY}` },
+        signal: controller.signal,
+      });
+      status = resp.status;
+      if (!resp.ok) {
+        await resp.body?.cancel();
+        throw new Error('RAGIC_HTTP');
+      }
+      return await resp.json();
+    } catch (error) {
+      const retryable = controller.signal.aborted || status === 429 ||
+        (status !== undefined && status >= 500) || error instanceof TypeError;
+      console.warn('[Ragic-Read]', {
+        table: ragicPath, attempt, status,
+        reason: controller.signal.aborted ? 'TIMEOUT' : status ? 'HTTP' : error instanceof SyntaxError ? 'INVALID_JSON' : 'NETWORK',
+        elapsedMs: Date.now() - started, retry: retryable && attempt < 2,
+      });
+      if (!retryable || attempt === 2) {
+        throw new TRPCError({ code: 'TIMEOUT', message: '資料查詢暫時無法完成，請稍後重試' });
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export async function ragicPost(ragicPath: string, data: Record<string, any>) {
