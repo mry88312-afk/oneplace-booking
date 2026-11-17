@@ -1,3 +1,4 @@
+import { reportBookingFailure } from "@/lib/bookingTracking";
 import type { ReactElement } from "react";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "wouter";
@@ -276,10 +277,18 @@ export default function BookingPublic() {
     else proceedAfterVerify();
   };
 
+  const [journeyReference,setJourneyReference]=useState<string|null>(null);
+  const journeyRequested=useRef(false);
+  const journeyLink=trpc.booking.linkJourney.useMutation({onSuccess:data=>setJourneyReference(data.id)});
   const verifyRetryRef = useRef(0);
   const verifyMutation = trpc.booking.verifyTenantUid.useMutation({
     onSuccess: (data) => {
       verifyRetryRef.current = 0;
+      if(!isActionMode && !journeyRequested.current) {
+        journeyRequested.current=true;
+        // 獨立背景記錄，不等待、不重送，也不影響預約流程。
+        journeyLink.mutate();
+      }
       setTenantName(data.tenantName); setRoomNumber(data.roomNumber);
       setPropertyName(data.propertyName || ""); setAddress(data.address || "");
       if (data.contractRecordId) setContractRecordId(data.contractRecordId);
@@ -303,8 +312,10 @@ export default function BookingPublic() {
       setIsVerifying(false);
     },
     onError: (err) => {
+      reportBookingFailure("identity_failed");
       const isUnavailable = err.message === "SERVICE_UNAVAILABLE" || (err as any)?.data?.httpStatus === 503;
       if (isUnavailable && verifyRetryRef.current < 3) {
+        reportBookingFailure("identity_failed",true);
         verifyRetryRef.current += 1;
         const delay = verifyRetryRef.current * 5000;
         toast.info(`服務正在啟動中，${delay / 1000} 秒後自動重試...`);
@@ -341,6 +352,7 @@ export default function BookingPublic() {
       setIsVerifying(false);
     },
     onError: (err) => {
+      reportBookingFailure("identity_failed");
       const isUnavailable = err.message === "SERVICE_UNAVAILABLE" || (err as any)?.data?.httpStatus === 503;
       if (isUnavailable && phoneRetryRef.current < 3) {
         phoneRetryRef.current += 1;
@@ -386,6 +398,7 @@ export default function BookingPublic() {
   const confirmMutation = trpc.booking.confirmBooking.useMutation({
     onSuccess: (data) => {
       if (!data.success) {
+        reportBookingFailure("submit_failed");
         toast.warning(data.message, { duration: 12000 });
         setIsBooking(false);
         return;
@@ -397,7 +410,7 @@ export default function BookingPublic() {
       setBookingResult({ success: true, bookingId: data.bookingId });
       setView("success"); setIsBooking(false);
     },
-    onError: (err) => { toast.error(publicErrorMessage(err.message, err.data?.code)); setIsBooking(false); },
+    onError: (err) => { reportBookingFailure("submit_failed"); toast.error(publicErrorMessage(err.message, err.data?.code)); setIsBooking(false); },
     onSettled: () => { inFlightRef.current = false; },
   });
 
@@ -604,6 +617,7 @@ export default function BookingPublic() {
       setFormAnswers((prev) => ({ ...prev, [fieldLabel]: dataUrl }));
       toast.success("檔案已就緒");
     } catch (err: any) {
+      reportBookingFailure("upload_failed");
       toast.error(err.message || "檔案處理失敗");
     } finally {
       setIsUploading(null);
@@ -757,6 +771,21 @@ export default function BookingPublic() {
     ? <div key={step} data-lt-flow={flowName} data-lt-section={step} {...(done ? { 'data-lt-goal': `${flowName}預約完成` } : { 'data-lt-step': step })}>{node}</div>
     : node;
 
+  useEffect(()=>{
+    if(!flowName)return;
+    document.body.setAttribute('data-lt-flow',flowName);
+    if(journeyReference)document.body.setAttribute('data-lt-booking-ref',journeyReference);
+    return ()=>{document.body.removeAttribute('data-lt-flow');document.body.removeAttribute('data-lt-booking-ref');};
+  },[flowName,journeyReference]);
+  useEffect(()=>{if(flowName && liffError)reportBookingFailure('login_failed');},[flowName,liffError]);
+  useEffect(()=>{if(flowName && templateQuery.error)reportBookingFailure('load_failed');},[flowName,templateQuery.error]);
+  useEffect(()=>{if(flowName && slotsQuery.error)reportBookingFailure('slots_failed');},[flowName,slotsQuery.error]);
+
+  useEffect(()=>{
+    const slots=slotsQuery.data?.slots;
+    if(flowName && view==='slots' && Array.isArray(slots) && !slotsQuery.isLoading && !slotsQuery.error && !slots.some(s=>s.available))reportBookingFailure('no_slots');
+  },[flowName,view,slotsQuery.data,slotsQuery.isLoading,slotsQuery.error]);
+
   // Render
   if (entryClosed) return <BookingErrorScreen title="此續約入口已停止新預約" message={CONTRACT_ENTRY_CLOSED} actionHref="https://liff.line.me/2006833424-znZYKjip" actionLabel="前往線上續約" />;
   if (templateQuery.isLoading) return <BookingLoadingScreen />;
@@ -773,7 +802,7 @@ export default function BookingPublic() {
     const missingBinding = verifyMutation.error?.message === "NEED_PHONE";
     return <BookingErrorScreen title={missingBinding ? "LINE 帳號尚未綁定" : "無法確認 LINE 身分"} message={missingBinding ? "請聯絡客服協助綁定後，再重新開啟預約連結。" : "請從 LINE 重新開啟預約連結，若仍無法登入請聯絡客服。"} />;
   }
-  if (view === "verify") return mark('身分確認', <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={handleVerify} />);
+  if (view === "verify") return mark('身分確認', <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={()=>{reportBookingFailure("identity_failed",true);handleVerify();}} />);
   if (view === "phone") return mark('電話驗證', <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />);
   if (view === "register") return mark('補登資料', <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />);
   if (view === "selectRoom") return mark('選房間', <SelectRoomView templateType={template.templateType} residences={residences} onPick={handlePickResidence} />);

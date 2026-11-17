@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+const BookingJourneyTenant = lazy(() => import("./BookingJourneyTenant"));
 const BookingAdmin = lazy(() => import("./BookingAdmin"));
 
 const PW_KEY = "adminPassword";
@@ -106,6 +107,7 @@ export default function AdminGate() {
     );
   }
 
+  const journeyRef=new URLSearchParams(location.search).get("journey");
   return (
     <Suspense
       fallback={
@@ -114,7 +116,7 @@ export default function AdminGate() {
         </div>
       }
     >
-      <BookingAdmin onLogout={handleLogout} />
+      {journeyRef ? <BookingJourneyTenant reference={journeyRef} /> : <BookingAdmin onLogout={handleLogout} />}
     </Suspense>
   );
 }

@@ -1,3 +1,4 @@
+import { reportBookingFailure } from "@/lib/bookingTracking";
 /**
  * P22b' — 續約「付款設定 / 更新個資」步驟（委派架構）。
  *
@@ -86,6 +87,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
       });
       onComplete(undefined, updatedName);
     } catch (err) {
+      reportBookingFailure("remittance_failed");
       toast.error(err instanceof Error ? err.message : '資料儲存失敗，請重試');
     }
   };
@@ -180,6 +182,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
         toast.error(r.message || "發送失敗");
       }
     } catch (err: any) {
+      reportBookingFailure("remittance_failed");
       toast.error(err?.message || "網路錯誤，請稍後重試");
     } finally {
       setSending(false);
@@ -196,6 +199,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
       if (r.success) { toast.success("驗證碼已重新發送"); clearOtp(); startCountdown(); }
       else toast.error(r.message || "發送失敗");
     } catch (err: any) {
+      reportBookingFailure("remittance_failed");
       toast.error(err?.message || "網路錯誤");
     } finally {
       setSending(false);
@@ -224,6 +228,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
         if (result.status === 'pending') pollRef.current = setTimeout(() => { void resumeRef.current(); }, 10000);
       }
     } catch (err: any) {
+      reportBookingFailure("remittance_failed");
       if (!mounted.current) return;
       if (err?.data?.code === 'UNAUTHORIZED' && flowRef.current!.forgetRejectedVerification()) {
         setSub('form');
