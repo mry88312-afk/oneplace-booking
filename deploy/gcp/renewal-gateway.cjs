@@ -8,6 +8,14 @@ const { createGate } = require('/gate/line-session.cjs');
 function createGateway(gate, key, upstreamFetch = fetch) {
   const app = express();
   app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    const started = Date.now();
+    res.once('finish', () => console.info('[Booking-Line-Gateway]', JSON.stringify({
+      route: ['/line-session', '/principal'].includes(req.path) ? req.path : 'other',
+      method: req.method, status: res.statusCode, elapsedMs: Date.now() - started,
+    })));
+    next();
+  });
   app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   app.use('/line-session', rateLimit({ windowMs: 60_000, max: 60 }));
   app.get('/principal', (req, res) => {

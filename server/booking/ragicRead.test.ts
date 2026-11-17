@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ragicGet } from '../routers/property/bookingHelpers';
 import { verificationFetch } from '../../client/src/lib/verificationFetch';
+import { createTRPCUntypedClient, httpBatchLink } from '@trpc/client';
+import superjson from 'superjson';
 
 test('外部一直不回應時，兩次讀取都會取消且最後結束', async t => {
   let cancelled = 0;
@@ -17,13 +19,15 @@ test('外部一直不回應時，兩次讀取都會取消且最後結束', async
 
 test('前端查詢十秒無回應後取消並提供可重試訊息，忽略晚到結果', async () => {
   let signal: AbortSignal | undefined;
-  const response = await verificationFetch(s => {
-    signal = s;
-    return new Promise(() => {});
-  });
+  const client = createTRPCUntypedClient({ links: [httpBatchLink({
+    url: 'http://fixture.invalid/api/trpc', transformer: superjson,
+    fetch: () => verificationFetch(s => {
+      signal = s;
+      return new Promise(() => {});
+    }),
+  })] });
+  await assert.rejects(client.mutation('booking.verifyTenantUid', { projectId: 'checkout', uid: 'fixture' }), /系統忙碌，請稍後重試/);
   assert.equal(signal?.aborted, true);
-  assert.equal(response.status, 408);
-  assert.match(await response.text(), /系統忙碌，請稍後重試/);
 });
 
 test('Ragic 讀取必須傳入取消訊號且使用欄位 ID', async t => {

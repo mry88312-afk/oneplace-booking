@@ -1,4 +1,21 @@
 booking.oneplace.com.tw {
+    log {
+        output file /var/log/caddy/booking-access.json {
+            roll_size 4MiB
+            roll_keep 3
+        }
+        format filter {
+            wrap json
+            fields {
+                request>uri delete
+                request>headers delete
+                request>remote_ip delete
+                request>client_ip delete
+                resp_headers delete
+            }
+        }
+    }
+    log_append entry_path {http.request.uri.path}
     @wrongHost expression `{http.request.tls.server_name} != "booking.oneplace.com.tw"`
     respond @wrongHost 421
     header {
