@@ -15,6 +15,10 @@ test('不存在的任務需同表正向對照才略過', async t => {
   assert.equal(await reminderTaskExists('go-back/1', '1046'), false);
   assert.equal(calls, 2);
 });
+test('Ragic 單筆以任務編號包住的正常紀錄仍通過', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ '1053': { _ragicId: 1053 } }));
+  assert.equal(await reminderTaskExists('go-back/1', '1053'), true);
+});
 test('明確 404 可略過', async t => {
   t.mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
   assert.equal(await reminderTaskExists('go-back/1', '1046'), false);
