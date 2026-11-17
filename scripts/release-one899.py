@@ -103,6 +103,8 @@ if action == 'stage':
     (release / 'before.caddy').write_text(before)
     (release / 'candidate.caddy').write_text(current)
     subprocess.run(['caddy', 'validate', '--config', str(release / 'candidate.caddy'), '--adapter', 'caddyfile'], check=True)
+    # root 驗證會建立檔案；交回實際 Caddy 使用者，確保 reload 可開啟與輪替。
+    run('chown', 'caddy:caddy', '/var/log/caddy/booking-access.json')
     receipt = {'tag': tag, 'app': app_name, 'gate': gate_name, 'appPort': port(app), 'gatePort': port(gate),
                'beforeHash': digest(before), 'oldEnvHash': digest(old_app['Config']['Env']),
                'newEnvHash': digest(app['Config']['Env']),

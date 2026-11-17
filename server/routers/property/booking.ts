@@ -1,3 +1,4 @@
+import { createJourneyLink, readJourneyTenant } from '../../booking/journeyLinks';
 import { assertBookingWritesEnabled, bookingDatasetId, bookingWritesEnabled, commonBookingLiff, commonBookingUrl } from "../../booking/runtime";
 import { BOOKING_UNAVAILABLE } from "../../../shared/bookingErrors";
 import { assertNewBookingAllowed, assertTemplateAccess } from "../../booking/projectAccess";
@@ -64,6 +65,14 @@ const tenantProcedure = publicProcedure.use(async ({ ctx, path, getRawInput, nex
 });
 
 export const bookingRouter = router({
+  linkJourney: tenantProcedure.mutation(async ({ctx}) => {
+    const {uid}=await bookingLinePrincipal(ctx.req.headers.cookie);
+    return createJourneyLink(uid);
+  }),
+  journeyTenant: adminProcedure.input(z.object({reference:z.string().uuid()})).query(({input,ctx})=>{
+    ctx.res.setHeader('Cache-Control','no-store');
+    return readJourneyTenant(input.reference);
+  }),
   saveRenewalProfile: tenantProcedure
     .input(renewalProfileChanges)
     .mutation(async ({ input, ctx }) => {
