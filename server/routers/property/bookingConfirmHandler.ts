@@ -16,13 +16,7 @@ import { submissionIdentity, persistedAnswers, submitBookingOnce } from "../../b
 import { createSubmissionStore } from "../../booking/submissionStore";
 import { BOOKING_REFRESH, BOOKING_UNAVAILABLE, errorCode } from "../../../shared/bookingErrors";
 
-/**
- * P102：所有對外 LINE 訊息一律經新站台（fieldops.zeabur.app）代發，禁止直打 LINE API。
- * MANUS 已退役——env 若還殘留 manus.space 的網址一律忽略，改用站台預設值。
- */
-const HUB_ORIGIN = "https://fieldops.zeabur.app";
-// TODO: 與站台 /api/line/relay 的 hardcode 同步；兩邊 env 都設好 BOOKING_WEBHOOK_SECRET 後移除
-const DEFAULT_WEBHOOK_SECRET = "ed291f55f85dd711d0d8ff6be096cb951ebe36a10efad71847dc5f00c19b0250";
+import { postToHub, relayPath, notifyPath } from "../../booking/hubRouting";
 
 const CHECKOUT_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
@@ -73,86 +67,9 @@ function assertCheckoutImageAnswers(
 }
 
 /** env 網址殘留 manus.space 時視同未設定（舊站已死，打過去只會 timeout）。 */
-function envUrl(name: string): string | undefined {
-  const v = process.env[name];
-  return v && !v.includes("manus.space") ? v : undefined;
-}
-
-/** notify-line webhook 網址（預約確認卡）。 */
-export function resolveNotifyUrl(): string {
-  return envUrl("MAIN_SYSTEM_WEBHOOK_URL") || `${HUB_ORIGIN}/api/booking/notify-line`;
-}
-
-/** 通用代發 relay 網址。 */
-function resolveRelayUrl(): string {
-  const explicit = envUrl("MANUS_LINE_RELAY_URL");
-  if (explicit) return explicit;
-  const notify = envUrl("MAIN_SYSTEM_WEBHOOK_URL");
-  if (notify) {
-    try { return new URL("/api/line/relay", notify).href; } catch {}
-  }
-  return `${HUB_ORIGIN}/api/line/relay`;
-}
-
-/**
- * POST JSON 到站台，帶 webhook secret。5xx／網路錯誤自動重試（Zeabur 換版有短暫 502
- * 空窗，見部署備忘），4xx 不重試（重打也不會好）。
- */
-export async function postToHub(
-  url: string,
-  body: any,
-  opts?: { once?: boolean; requireMessageId?: boolean },
-): Promise<{ ok: boolean; status?: number; error?: string; messageId?: string }> {
-  if (opts?.once && !process.env.BOOKING_WEBHOOK_SECRET)
-    return { ok: false, error: "BOOKING_WEBHOOK_SECRET 未設定" };
-  const secret = process.env.BOOKING_WEBHOOK_SECRET || DEFAULT_WEBHOOK_SECRET;
-  const delaysMs = opts?.once ? [0] : [0, 3000, 10000];
-  let lastErr = "";
-  for (const delay of delaysMs) {
-    if (delay) await new Promise((r) => setTimeout(r, delay));
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(opts?.once ? 15000 : 8000),
-      });
-      const text = await resp.text().catch(() => "");
-      if (resp.ok) {
-        // Some deployed relays return HTTP 200 for application errors.
-        // Do not mark a notification delivered from its HTTP status alone.
-        let result: any;
-        try {
-          result = JSON.parse(text);
-        } catch {
-          return { ok: false, status: resp.status, error: "Hub returned a non-JSON response" };
-        }
-        if (!result || typeof result !== "object" || Array.isArray(result)) {
-          return { ok: false, status: resp.status, error: "Hub returned an invalid response" };
-        }
-        if (opts?.requireMessageId) {
-          const id = result.sentMessages?.[0]?.id;
-          if (!result.error && result.ok !== false && result.success !== false && typeof id === "string" && id.length)
-            return { ok: true, status: resp.status, messageId: id };
-          return { ok: false, status: resp.status, error: "未取得 LINE 接受回執，請核對，勿重送" };
-        }
-        if (result.error || result.ok === false || result.success === false) {
-          return { ok: false, status: resp.status, error: `Hub rejected message: ${text.slice(0, 150)}` };
-        }
-        return { ok: true, status: resp.status };
-      }
-      lastErr = opts?.once ? `發送未確認（HTTP ${resp.status}），請核對，勿重送` : `${resp.status}: ${text.slice(0, 150)}`;
-      if (resp.status < 500) return { ok: false, status: resp.status, error: lastErr };
-    } catch (err: any) {
-      lastErr = opts?.once ? "發送結果不明（連線中斷或逾時），請核對，勿重送" : err?.message || String(err);
-    }
-  }
-  return { ok: false, error: lastErr };
-}
-
 /**
  * 統一送訊：所有對外 LINE 訊息（push / reply）都走這裡，POST 到站台通用代發
- * relay（站台原樣轉給 LINE + 記錄客服聊天）。站台掛掉時重試後放棄並留 error log，
+ * relay（站台原樣轉給 LINE + 記錄客服聊天）。正式內容只傳一次，回應不明時保留錯誤，
  * 不再 fallback 直發 LINE（P102 定調：訊息只能透過站台發出）。
  * payload = 原封不動要送 LINE 的 body（push={to,messages}；reply={replyToken,messages}）。
  * recordUid：給站台記錄客服聊天的對象；省略則不記錄（測試/內部通知用）。
@@ -169,14 +86,14 @@ export async function relayToLine(
     };
   },
 ): Promise<{ success: boolean; error?: string; via?: string }> {
-  const r = await postToHub(resolveRelayUrl(), {
+  const r = await postToHub(relayPath, {
     lineEndpoint,
     payload,
     recordUid: opts?.recordUid,
     supportEscalation: opts?.supportEscalation,
   });
   if (r.ok) return { success: true, via: "hub_relay" };
-  console.error(`[relay] 站台代發失敗（依 P102 不直發 LINE，訊息未送出）: ${r.error}`);
+  console.error(`[relay] 站台代發失敗（依 P102 不直發 LINE，訊息未確認）: ${r.error}`);
   return { success: false, error: r.error, via: "failed" };
 }
 
@@ -195,9 +112,9 @@ export async function relayPush(
 export async function relayPushOnce(
   uid: string, message: object,
 ): Promise<{ accepted: boolean; messageId?: string; error?: string }> {
-  const result = await postToHub(resolveRelayUrl(),
+  const result = await postToHub(relayPath,
     { lineEndpoint: "push", payload: { to: uid, messages: [message] }, recordUid: uid },
-    { once: true, requireMessageId: true });
+    { requireMessageId: true });
   return { accepted: result.ok, messageId: result.messageId, error: result.error };
 }
 
@@ -965,9 +882,9 @@ export async function handleConfirmBooking(
       }
       // Fire-and-forget — 不阻擋預約成功 response。
       // 一律走站台 notify-line webhook（站台發 LINE 卡片＋記錄 system message）；
-      // 失敗重試後放棄留 log，不 fallback 直發 LINE（P102 定調：只能透過站台發出）。
+      // 結果不明時留 log、勿重送，不 fallback 直發 LINE（P102 定調：只能透過站台發出）。
       (async () => {
-        const r = await postToHub(resolveNotifyUrl(), {
+        const r = await postToHub(notifyPath, {
           tenantUid: input.uid,
           bookingId: record.insertId,
           flexMessage,
@@ -976,7 +893,7 @@ export async function handleConfirmBooking(
           console.log(`[Booking] LINE notify sent via webhook for ${input.uid.slice(0, 8)}...`);
         } else {
           console.error(
-            `[Booking] notify-line webhook 失敗（依 P102 不直發 LINE，確認卡未送出）: ${r.error}`,
+            `[Booking] notify-line webhook 失敗（依 P102 不直發 LINE，確認卡未確認）: ${r.error}`,
           );
         }
       })().catch((e: any) =>

@@ -4,7 +4,7 @@
  * 大腦（Supabase）每日用 pg_cron 算出 outreach.schedule、並用 pg_net 把
  * 「已確認且到期」的 schedule_ids POST 到 /api/outreach/run。本檔負責：
  *   1) runOutreach()：發送前再用本地 booking_records 即時防重（stale-value race），
- *      渲染卡片變數、經 MANUS webhook 發送（失敗 fallback 直發 LINE）、回寫 status。
+ *      渲染卡片變數、經服務中台單次發送、回寫 status。
  *   2) tRPC adminProcedure：後台看板（列出/編輯/立即送）與規則編輯器、設定。
  *
  * 所有 Supabase 讀寫都在後端（SUPABASE_DB_URL），瀏覽器只打本服務 tRPC。
@@ -16,6 +16,7 @@ import { router, adminProcedure } from "../../_core/trpc";
 import { sbQuery, isSupabaseConfigured } from "../../db/supabaseClient";
 import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
+import { claimOutreach } from "../../booking/claimOutreach";
 import { relayPush } from "./bookingConfirmHandler";
 import { rentHistory, previewRentReminders, setRentEnabled } from "../../rentReminders/service";
 
@@ -153,7 +154,7 @@ async function confirmOne(id: string): Promise<{ id: string; ok: boolean; error?
   await guardRentSchedule(id);
   const r = await sbQuery<{ id: string }>(
     `update outreach.schedule set status='confirmed', updated_at=now()
-      where id=$1 and status in ('pending','skipped') returning id`,
+      where id=$1 and sent_at is null and not (coalesce(vars,'{}'::jsonb) ? '_hub_dispatch_started') and status in ('pending','skipped') returning id`,
     [id],
   );
   if (r.length) return { id, ok: true };
@@ -167,7 +168,7 @@ async function skipOne(id: string): Promise<{ id: string; ok: boolean; error?: s
   await guardRentSchedule(id);
   const r = await sbQuery<{ id: string }>(
     `update outreach.schedule set status='skipped', updated_at=now()
-      where id=$1 and status in ('pending','confirmed','skipped') returning id`,
+      where id=$1 and sent_at is null and not (coalesce(vars,'{}'::jsonb) ? '_hub_dispatch_started') and status in ('pending','confirmed','skipped') returning id`,
     [id],
   );
   if (r.length) return { id, ok: true };
@@ -180,7 +181,7 @@ async function skipOne(id: string): Promise<{ id: string; ok: boolean; error?: s
  * 對指定的 schedule_ids 執行發送 gate。
  * - 非 pending/confirmed 的列 → skipped（避免重送已 sent/cancelled/skipped）
  * - 命中 booking_records → status=suppressed（非錯誤，不發）
- * - 發送成功 → status=sent + sent_at；失敗或例外 → 維持原狀以利下次重試
+ * - 發送成功 → status=sent + sent_at；派送已開始但回應不明 → 保留鎖定，勿重送
  */
 export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
   const result: RunResult = { sent: 0, suppressed: 0, failed: 0, skipped: 0, errors: [] };
@@ -209,6 +210,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
     )[0]?.u || null;
 
   for (const row of rows) {
+    let dispatchStarted = false;
     try {
       if (row.dedupe_key?.startsWith("jgb-rent:")) {
         result.skipped++;
@@ -252,7 +254,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         const ok = bk.length > 0 && bk[0].status === "confirmed" && taipeiYmd(bk[0].bookingTime) === String(row.vars?.booking_date || "");
         if (!ok) {
           await sbQuery(
-            `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1`,
+            `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
             [row.id, "退租預約已取消或已改期（發送前再驗）"],
           );
           result.skipped++;
@@ -298,7 +300,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         const hit = chk[0];
         if (hit && (hit.moved_out || hit.superseded)) {
           await sbQuery(
-            `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1`,
+            `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
             [row.id, hit.moved_out ? "合約已退租（move_out_date 已填，發送前查核）" : "房間已有更新合約（續約/接手，發送前查核）"],
           );
           result.suppressed++;
@@ -332,32 +334,36 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       // 防重打擾只適用合約規則卡（booking 提醒本來就該有退租預約；api 內容由來源系統決定）
       if ((row.source ?? "rule") === "rule" && (await hasActiveBookingSuppress(targetUid))) {
         await sbQuery(
-          `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1`,
+          `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
           [row.id, "已有續約/退租預約（booking_records 即時查核）"],
         );
         result.suppressed++;
         continue;
       }
       const message = toFlexMessage(renderTemplate(card, computeVars(row)), altText);
+      // Claim in the shared database before any network send. Even a crash or lost
+      // receipt leaves this row out of the cron queue across both deployments.
+      if (!await claimOutreach(row.id, sbQuery)) { result.skipped++; continue; }
+      dispatchStarted = true;
       const push = await relayPush(targetUid, message);
       if (push.success) {
         await sbQuery(
-          `update outreach.schedule set status='sent', sent_at=now(), last_error=null, updated_at=now() where id=$1`,
+          `update outreach.schedule set status='sent', sent_at=now(), suppressed_reason=null, last_error=null, updated_at=now() where id=$1`,
           [row.id],
         );
         result.sent++;
       } else {
-        console.error(`[outreach] push failed for ${row.id}: ${push.error}`);
-        await markSendFailure(row.id, push.error || "push failed"); // status 不變、可重試，記錄失敗
+        const error = push.error || "中台派送未確認，請核對，勿重送";
+        await sbQuery(`update outreach.schedule set last_error=$2, updated_at=now() where id=$1`, [row.id, error]);
         result.failed++;
-        result.errors.push({ id: row.id, error: push.error || "push failed" });
+        result.errors.push({ id: row.id, error });
       }
     } catch (err: any) {
       console.error(`[outreach] error on ${row.id}: ${err?.message || err}`);
-      if (!redirect) {
+      if (!redirect && !dispatchStarted) {
         try { await markSendFailure(row.id, String(err?.message || err)); } catch {}
       }
-      result.failed++; // 維持原狀，下次重試
+      result.failed++;
       result.errors.push({ id: row.id, error: String(err?.message || err) });
     }
   }
@@ -759,13 +765,13 @@ export const outreachRouter = router({
         }
         case "skip":
           await sbQuery(
-            `update outreach.schedule set status='skipped', updated_at=now() where id=$1`,
+            `update outreach.schedule set status='skipped', updated_at=now() where id=$1 and status in ('pending','confirmed','skipped')`,
             [input.id],
           );
           break;
         case "confirm":
           await sbQuery(
-            `update outreach.schedule set status='confirmed', updated_at=now() where id=$1 and status in ('pending','skipped')`,
+            `update outreach.schedule set status='confirmed', updated_at=now() where id=$1 and sent_at is null and not (coalesce(vars,'{}'::jsonb) ? '_hub_dispatch_started') and status in ('pending','skipped')`,
             [input.id],
           );
           break;
@@ -777,7 +783,7 @@ export const outreachRouter = router({
           break;
         case "cancel":
           await sbQuery(
-            `update outreach.schedule set status='cancelled', updated_at=now() where id=$1`,
+            `update outreach.schedule set status='cancelled', updated_at=now() where id=$1 and sent_at is null and not (coalesce(vars,'{}'::jsonb) ? '_hub_dispatch_started')`,
             [input.id],
           );
           break;
