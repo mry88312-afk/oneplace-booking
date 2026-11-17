@@ -1,4 +1,4 @@
-import { reportBookingFailure } from "@/lib/bookingTracking";
+import { reportBookingAttempt, reportBookingFailure } from "@/lib/bookingTracking";
 /**
  * P22b' — 續約「付款設定 / 更新個資」步驟（委派架構）。
  *
@@ -75,6 +75,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
   const lineRenewal = Boolean(template.lineRenewal);
   const saveProfile = trpc.booking.saveRenewalProfile.useMutation();
   const continueBooking = async () => {
+    reportBookingAttempt('remittance_failed');
     const updatedName = nameVal.trim();
     const updatedJob = job.trim();
     if (!updatedName || !updatedJob) return toast.error('請填寫姓名及職業');
@@ -158,6 +159,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
 
   const handleSendOtp = async () => {
+    reportBookingAttempt('remittance_failed');
     if (!/^\d{8,15}$/.test(normalizedPhone)) {
       return toast.error("檔內電話格式有誤，請聯繫客服");
     }
@@ -191,6 +193,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
 
   const handleResend = async () => {
     if (countdown > 0) return;
+    reportBookingAttempt('remittance_failed');
     setSending(true);
     try {
       const r = await postJson("/send-otp", {
@@ -208,6 +211,7 @@ export function RemittanceView({ template, name, phone, existingEmail = "", exis
 
   const handleVerify = async () => {
     if (verifying || completed.current) return;
+    reportBookingAttempt('remittance_failed');
     if (!flowRef.current!.hasSaved() && otpValue.length < 4) return toast.error("請輸入完整驗證碼");
     if (pollRef.current) clearTimeout(pollRef.current);
     setVerifying(true);

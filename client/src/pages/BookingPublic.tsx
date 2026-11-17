@@ -1,4 +1,4 @@
-import { reportBookingFailure } from "@/lib/bookingTracking";
+import { reportBookingAttempt, reportBookingFailure } from "@/lib/bookingTracking";
 import type { ReactElement } from "react";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "wouter";
@@ -587,6 +587,7 @@ export default function BookingPublic() {
   };
 
   const handleFileUpload = async (fieldLabel: string, file: File) => {
+    reportBookingAttempt('upload_failed');
     const checkoutImageMime = projectId === "checkout" ? await resolveCheckoutImageMime(file) : null;
     // P104：退租選檔當下即拒絕 PDF／文件，不等送出預約才攔截。
     if (projectId === "checkout" && !checkoutImageMime) {
@@ -626,6 +627,7 @@ export default function BookingPublic() {
 
   const doBooking = (slot: { startTime: string; endTime: string; calendarId?: string; calendarOwner?: string }) => {
     if (inFlightRef.current) return; // 防重複送出
+    reportBookingAttempt('submit_failed');
     if (!template?.writesEnabled) return toast.error('預約服務暫時維護中，請稍後再試或聯繫小幫手。');
     const bookingUid = uid || lineUserId || phoneInput.trim() || "unknown";
     try {
@@ -802,7 +804,7 @@ export default function BookingPublic() {
     const missingBinding = verifyMutation.error?.message === "NEED_PHONE";
     return <BookingErrorScreen title={missingBinding ? "LINE 帳號尚未綁定" : "無法確認 LINE 身分"} message={missingBinding ? "請聯絡客服協助綁定後，再重新開啟預約連結。" : "請從 LINE 重新開啟預約連結，若仍無法登入請聯絡客服。"} />;
   }
-  if (view === "verify") return mark('身分確認', <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={()=>{reportBookingFailure("identity_failed",true);handleVerify();}} />);
+  if (view === "verify") return mark('身分確認', <VerifyView template={template} liffReady={liffReady} liffError={liffError} uidFromUrl={uidFromUrl} lineUserId={lineUserId} isVerifying={isVerifying} verifyMutation={verifyMutation} setView={setView} handleVerify={()=>{reportBookingAttempt("identity_failed");handleVerify();}} />);
   if (view === "phone") return mark('電話驗證', <PhoneView phoneInput={phoneInput} setPhoneInput={setPhoneInput} isVerifying={isVerifying} verifyByPhoneMutation={verifyByPhoneMutation} handlePhoneVerify={handlePhoneVerify} />);
   if (view === "register") return mark('補登資料', <RegisterView phoneInput={phoneInput} nameInput={nameInput} setNameInput={setNameInput} locationInput={locationInput} setLocationInput={setLocationInput} roomInput={roomInput} setRoomInput={setRoomInput} isVerifying={isVerifying} registerMutation={registerMutation} handleRegister={handleRegister} setView={setView} />);
   if (view === "selectRoom") return mark('選房間', <SelectRoomView templateType={template.templateType} residences={residences} onPick={handlePickResidence} />);

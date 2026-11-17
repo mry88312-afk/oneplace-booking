@@ -3,7 +3,13 @@ declare global {
   interface Window { OnePlaceTracking?: {error:(code:TrackingFailure)=>void;retry:(code:TrackingFailure)=>void}; __ltPending?: {kind:'error'|'retry';code:TrackingFailure}[] }
 }
 // 只傳固定分類；不傳表單、帳號、錯誤原文或租客資料。追蹤故障不得影響預約。
+const failed=new Set<TrackingFailure>();
+export function reportBookingAttempt(code:TrackingFailure) {
+  if(failed.delete(code))reportBookingFailure(code,true);
+}
 export function reportBookingFailure(code:TrackingFailure,retry=false) {
+  if(!retry)failed.add(code);
+  else failed.delete(code);
   try {
     const kind=retry?'retry':'error';
     if(window.OnePlaceTracking)window.OnePlaceTracking[kind](code);
