@@ -11,7 +11,9 @@ export async function reminderTaskExists(path: string, id: string): Promise<bool
         Object.values(control).some(value => value && typeof value === 'object' && '_ragicId' in value)) return false;
     throw new Error('Ragic 任務表讀取權限無法確認，待核對');
   }
-  if (typeof record !== 'object' || Array.isArray(record) || String(record._ragicId) !== id) {
+  const item = record && typeof record === 'object' && !Array.isArray(record)
+    ? (record._ragicId !== undefined ? record : record[id]) : null;
+  if (!item || typeof item !== 'object' || Array.isArray(item) || String(item._ragicId) !== id) {
     throw new Error('Ragic 任務查詢結果無法確認，待核對');
   }
   return true;
