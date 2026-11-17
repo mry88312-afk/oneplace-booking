@@ -76,6 +76,9 @@ old_name='one900-public-d04977b2784d'
 old=inspect(old_name)
 current=SITE.read_text()
 if action=='stage':
+    # 必須檢查此次交付的資產，不能讓舊映像殘留的檔案掩蓋錯誤。
+    assets=list((release/'dist/public/assets').glob('*.js'))
+    assert any('/booking-link/line-session' in p.read_text() for p in assets), '缺少正式 LINE 驗證建置設定'
     assert 'X-OnePlace-Release d04977b2784d' in current
     assert not (release/'receipt.json').exists()
     oldport=port(old)
