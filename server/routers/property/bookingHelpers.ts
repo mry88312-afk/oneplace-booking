@@ -73,7 +73,7 @@ export function getCalendarClient() {
 
 // ─── Ragic helpers ───────────────────────────────────────────────────────────
 
-export async function ragicGet(ragicPath: string, params?: Record<string, string>) {
+export async function ragicGet(ragicPath: string, params?: Record<string, string>, options?: { allowNotFound?: boolean }) {
   const url = new URL(`${BASE}/${APP}/${ragicPath}`);
   url.searchParams.set("v", "3");
   url.searchParams.set("api", "");
@@ -94,6 +94,10 @@ export async function ragicGet(ragicPath: string, params?: Record<string, string
         signal: controller.signal,
       });
       status = resp.status;
+      if (status === 404 && options?.allowNotFound) {
+        await resp.body?.cancel();
+        return null;
+      }
       if (!resp.ok) {
         await resp.body?.cancel();
         throw new Error('RAGIC_HTTP');
