@@ -556,7 +556,7 @@ const SCHEDULE_COLS =
  * 回溯下限 90 天：避免撈到早已離開、只是沒補退租日的陳年合約。
  */
 const RENEWAL_DUE_LOOKBACK_DAYS = 90;
-async function scanRenewalDueList(thresholdDays: number) {
+export async function scanRenewalDueList(thresholdDays: number) {
   const pool = await sbQuery<any>(
     `with room_latest as (
        select distinct on (tc.property_id, coalesce(tc.unit_id::text, nullif(tc.legacy_snapshot->>'1014736',''), 'c:'||tc.contract_no))

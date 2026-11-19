@@ -101,6 +101,20 @@ Zeabur Console → New Service → Deploy from GitHub →
 
 **LIFF ID 不變**，所以資料庫的 `bookingTemplates.liffId` 不需要動。
 
+## 合約週報儀表板讀取 API
+
+`GET /api/dashboard/renewal-due?thresholdDays=30`
+
+供「合約週報儀表板」直接讀取「合約到期但未預約續約/退租」名單，取代先前用瀏覽器插件
+從後台頁面擷取資料的作法。
+
+- Header：`x-dashboard-secret`，需等於環境變數 `DASHBOARD_READ_SECRET`（唯讀權限，
+  刻意跟能代發 LINE 的 `OUTREACH_RUN_SECRET`、能改排程/規則的 `ADMIN_PASSWORD` 分開，
+  降低儀表板萬一外洩時的影響範圍）。
+- `thresholdDays`（可選，預設 30，範圍 -365~365）：到期門檻天數，同後台「到期屋主」頁邏輯。
+- 回傳 JSON：`{ thresholdDays, total, bookedCount, list }`，`list` 每筆含
+  `line_uid, primary_name, primary_phone, contract_no, end_date, days_left, property, room, region, internal_cat, contract_status`。
+
 ## 安全提醒
 
 - `BOOKING_WEBHOOK_SECRET` 主系統跟本服務都要設成同樣的隨機字串（建議 32+ 字元）
