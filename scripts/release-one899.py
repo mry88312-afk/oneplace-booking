@@ -13,8 +13,8 @@ import urllib.error
 
 ROOT = pathlib.Path('/srv/one899-booking')
 SITE = pathlib.Path('/etc/caddy/sites/booking.caddy')
-OLD_APP = 'one824-public-bd4a99070205'
-OLD_GATE = 'one824-line-b76d1d8c9dce'
+OLD_APP = 'booking-public-bd4a99070205'
+OLD_GATE = 'booking-line-b76d1d8c9dce'
 
 def run(*args):
     return subprocess.check_output(args, text=True).strip()
@@ -87,9 +87,9 @@ if action == 'stage':
     image = 'one899-booking:' + tag
     (release / 'Dockerfile').write_text('FROM ' + old_app['Config']['Image'] + '\nCOPY dist/ /app/dist/\n')
     subprocess.run(['docker', 'build', '-t', image, str(release)], check=True)
-    gate_name = 'one899-line-' + tag
+    gate_name = 'booking-verification-line-' + tag
     gate = clone(old_gate, gate_name, old_gate['Config']['Image'], gate_dir=gate_dir)
-    app_name = 'one899-public-' + tag
+    app_name = 'booking-verification-public-' + tag
     app = clone(old_app, app_name, image, bridge='http://' + gate_name + ':3000')
     before = current
     assert current.count('127.0.0.1:32799') == 4

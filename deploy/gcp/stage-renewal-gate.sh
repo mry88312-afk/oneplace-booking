@@ -4,9 +4,9 @@ test "$(id -u)" = 0
 r="$1"
 [[ "$r" =~ ^/srv/one824-booking-20261110/releases/[a-f0-9]{12}$ ]]
 base=/srv/oneplace-release-820-823-824
-core=one823-combined-956f2f0fce13-app
-gate=one824-renewal-${r##*/}
-depimage=$(docker inspect --format '{{.Image}}' one823-public-line-01)
+core=deposit-combined-956f2f0fce13-app
+gate=booking-renewal-${r##*/}
+depimage=$(docker inspect --format '{{.Image}}' deposit-public-line-01)
 oldgate="$base/deposit-public-956f2f0-02/gate"
 pilot="$base/deposit-occupation-01/files/gate/line-subject.sha256"
 coreport=$(docker port "$core" 3000/tcp | sed -n 's/^127\.0\.0\.1://p')
@@ -29,7 +29,7 @@ docker run --rm --network none "${opts[@]}" "$depimage" node /gate/renewal-gatew
 for net in one824-booking one824-deposit; do docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null; done
 if ! docker inspect "$core" --format '{{json .NetworkSettings.Networks}}' | grep -q '"one824-deposit"'; then docker network connect --alias deposit-core one824-deposit "$core"; fi
 if ! docker inspect "$gate" >/dev/null 2>&1; then
-  docker create --name "$gate" --restart unless-stopped --network one824-booking "${opts[@]}" --log-driver none \
+  docker create --name "$gate" --restart unless-stopped --network one824-booking --network-alias "one824-renewal-${r##*/}" "${opts[@]}" --log-driver none \
     -p 127.0.0.1::3000 --mount "type=bind,src=$base/deposit-occupation-01/proof,dst=/run/occupation-proof,readonly" \
     --mount "type=bind,src=$pilot,dst=/run/pilot,readonly" -e PILOT_SUBJECT_FILE=/run/pilot "$depimage" node /gate/renewal-gateway.cjs >/dev/null
   docker network connect one824-deposit "$gate"
