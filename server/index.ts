@@ -156,6 +156,32 @@ async function startServer() {
     }
   });
 
+  // 合約週報儀表板讀取用：合約到期但未預約續約/退租的名單。唯讀，獨立密鑰（刻意比 OUTREACH_RUN_SECRET
+  // 權限小：不能發訊息、不能改排程），避免儀表板只是要讀名單卻要拿到可以代發 LINE 的密鑰。
+  // Header：x-dashboard-secret（= 環境變數 DASHBOARD_READ_SECRET）。
+  app.get("/api/dashboard/renewal-due", async (req, res) => {
+    const expected = process.env.DASHBOARD_READ_SECRET;
+    if (!expected) return res.status(503).json({ error: "DASHBOARD_READ_SECRET not set" });
+    const got = String(req.header("x-dashboard-secret") || "");
+    const a = Buffer.from(got);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const thresholdDays = Number(req.query.thresholdDays ?? 30);
+    if (!Number.isInteger(thresholdDays) || thresholdDays < -365 || thresholdDays > 365) {
+      return res.status(400).json({ error: "thresholdDays must be an integer between -365 and 365" });
+    }
+    try {
+      const { scanRenewalDueList } = await import("./routers/property/outreachHandlers");
+      const result = await scanRenewalDueList(thresholdDays);
+      return res.json({ thresholdDays, ...result });
+    } catch (err: any) {
+      console.error("[dashboard] renewal-due error:", err?.message || err);
+      return res.status(500).json({ error: err?.message || "error" });
+    }
+  });
+
   // LINE 入站轉發接收：MANUS 收到 LINE 訊息後，把「圖文選單觸發」(▶ 開頭) 的 event 轉發到這裡。
   // Header：x-inbound-secret（= OUTREACH_RUN_SECRET）；Body：{ events: [LINE event] } 或 { event: LINE event }。
   app.post("/api/line/inbound", async (req, res) => {
