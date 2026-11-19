@@ -5,8 +5,8 @@ tag="$1"; liff="$2"
 [[ "$tag" =~ ^[0-9a-f]{12}$ && "$liff" =~ ^2006833424-[a-zA-Z0-9]+$ ]]
 r="/srv/one824-booking-20261110/releases/$tag"
 src=/srv/oneplace-release-820-823-824
-gate="one824-renewal-$tag"
-app="one824-pilot-$tag"
+gate="booking-renewal-$tag"
+app="booking-pilot-$tag"
 site=/etc/caddy/sites/booking.caddy
 exec 9>/run/lock/one824-pilot.lock
 flock -n 9
