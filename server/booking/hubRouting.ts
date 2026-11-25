@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 export const legacyHub = "https://fieldops.zeabur.app";
 export const notifyPath = "/api/booking/notify-line";
 export const relayPath = "/api/line/relay";
-export type HubPath = typeof notifyPath | typeof relayPath;
+export const roommateGroupNotifyPath = "/api/booking/roommate-group-notify";
+export type HubPath = typeof notifyPath | typeof relayPath | typeof roommateGroupNotifyPath;
 type Route = { primary: "zeabur" } | { primary: "gcp"; origin: string };
 
 export function parseRoute(raw: string): Route {
@@ -28,12 +29,16 @@ function request(url: string, secret: string, body: string, timeout: number) {
   }, body, signal: AbortSignal.timeout(timeout) });
 }
 
-// Both hub endpoints validate these required fields BEFORE interacting with LINE.
-// An empty object contains neither a recipient, reply token nor a message.
+// 只有空白探測可在站台間切換，正式內容由選定的站台處理一次。
 export async function probeHub(origin: string, path: HubPath, secret: string): Promise<boolean> {
   try {
     const r = await request(origin + path, secret, "{}", 3000);
     if (r.status !== 400) { await r.body?.cancel(); return false; }
+    // 群組端點對缺少 siteNo、text 或 dedupeKey 回 400。
+    if (path === roommateGroupNotifyPath) {
+      await r.body?.cancel();
+      return true;
+    }
     const body = await r.json();
     const required = path === relayPath ? ["lineEndpoint", "payload"] : ["tenantUid", "flexMessage"];
     return body?.error === "missing_fields" && Array.isArray(body.required)
@@ -41,8 +46,9 @@ export async function probeHub(origin: string, path: HubPath, secret: string): P
   } catch { return false; }
 }
 
-export async function postToHub(path: HubPath, payload: object, opts?: { requireMessageId?: boolean }):
-Promise<{ ok: boolean; status?: number; error?: string; messageId?: string }> {
+type HubResponse = { ok: boolean; status?: number; error?: string; messageId?: string; deliveryStatus?: string };
+
+export async function postToHub(path: HubPath, payload: object, opts?: { requireMessageId?: boolean }): Promise<HubResponse> {
   const secret = process.env.BOOKING_WEBHOOK_SECRET;
   if (!secret) return { ok: false, error: "BOOKING_WEBHOOK_SECRET 未設定；未發送" };
   let origin = legacyHub;
@@ -57,20 +63,26 @@ Promise<{ ok: boolean; status?: number; error?: string; messageId?: string }> {
   }
   // Once the real payload leaves us, neither HTTP errors nor timeouts prove non-delivery.
   // Never replay it to this or the other site.
+  const groupNotice = path === roommateGroupNotifyPath;
   try {
     const r = await request(origin + path, secret, JSON.stringify(payload), 15000);
     console.info(`[hub-route] ${origin === legacyHub ? "zeabur" : "gcp"} ${path} HTTP ${r.status}`);
     if (r.ok) {
       const body = await r.json();
-      if (body && typeof body === "object" && !Array.isArray(body) && !body.error
+      if (groupNotice) {
+        if (r.status === 200 && body?.ok === true && typeof body.status === "string")
+          return { ok: true, status: r.status, deliveryStatus: body.status };
+      } else if (body && typeof body === "object" && !Array.isArray(body) && !body.error
         && body.success !== false && body.ok !== false) {
         const id = body.sentMessages?.[0]?.id;
         if (!opts?.requireMessageId || (typeof id === "string" && id.trim()))
           return { ok: true, status: r.status, messageId: typeof id === "string" ? id : undefined };
       }
     } else await r.body?.cancel();
+    if (groupNotice) return { ok: false, status: r.status, error: `群組通知回應未確認（HTTP ${r.status}）` };
     return { ok: false, status: r.status, error: `中台回應未確認（HTTP ${r.status}），請核對，勿重送` };
   } catch {
+    if (groupNotice) return { ok: false, error: "群組通知結果未確認（連線中斷、逾時或回應無效）" };
     return { ok: false, error: "發送結果不明（逾時、連線中斷或回應無效），請核對，勿重送" };
   }
 }
