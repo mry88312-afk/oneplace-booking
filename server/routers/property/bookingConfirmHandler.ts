@@ -17,6 +17,7 @@ import { createSubmissionStore } from "../../booking/submissionStore";
 import { BOOKING_REFRESH, BOOKING_UNAVAILABLE, errorCode } from "../../../shared/bookingErrors";
 
 import { postToHub, relayPath, notifyPath } from "../../booking/hubRouting";
+import { isCheckoutReminderProject, maybeEnqueueImmediateCheckoutGroupReminder } from "./checkoutGroupReminder";
 
 const CHECKOUT_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
@@ -667,6 +668,10 @@ export async function handleConfirmBooking(
   if (!submission.success || !submission.fresh) return submission;
   const ragicRecordId = submission.ragicRecordId;
   const record = { insertId: submission.bookingId };
+  if (isCheckoutReminderProject(template.projectId)) {
+    void maybeEnqueueImmediateCheckoutGroupReminder(record.insertId, { isReschedule: false })
+      .catch(error => console.error("[Booking] 退租群組提醒排程失敗:", errorCode(error)));
+  }
 
   // 3. 回寫合約記錄（/go-back/22 欄位 1015394 = 續約 or 退租）
   if (input.contractRecordId && template.contractAction) {

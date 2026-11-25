@@ -14,6 +14,8 @@ import * as schema from "../../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { ragicPut, ragicDelete, ragicExecuteButton } from "./bookingHelpers";
 import { relayPush } from "./bookingConfirmHandler";
+import { isCheckoutReminderProject, maybeEnqueueImmediateCheckoutGroupReminder } from "./checkoutGroupReminder";
+import { errorCode } from "../../../shared/bookingErrors";
 
 // ─── LINE 卡片小工具（取消 / 變更後通知）──────────────────────────────────
 
@@ -224,6 +226,11 @@ export async function handleRescheduleBooking(input: {
       googleCalendarId: input.calendarId,
     })
     .where(eq(schema.bookingRecords.id, record.id));
+
+  if (isCheckoutReminderProject(template.projectId)) {
+    void maybeEnqueueImmediateCheckoutGroupReminder(record.id, { isReschedule: true })
+      .catch(error => console.error("[Reschedule] 退租群組提醒排程失敗:", errorCode(error)));
+  }
 
   // 送出「已更新時間」卡片（保留動作按鈕，可再次變更/取消）
   if (record.tenantUid) {
