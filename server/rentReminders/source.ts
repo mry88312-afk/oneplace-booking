@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { request } from "node:https";
 import { Bill, dateOnly } from "./domain";
 
-const LEGACY_ORIGIN = "https://jgbcontractkehsin.zeabur.app";
 const MACHINE_ORIGIN = "https://jgb-api.oneplace.com.tw";
 const BOOKING_IDENTITY = "calendar-booking@one-place-living-manus.iam.gserviceaccount.com";
 
@@ -137,53 +136,21 @@ export async function parseWorkbook(bytes: ArrayBuffer): Promise<Bill[]> {
   });
   return parseRows(rows);
 }
-const zeaburRequest: ReportRequest = (path, body) => fetch(LEGACY_ORIGIN + path, {
-  method: body ? "POST" : "GET", redirect: "error", headers: { "Content-Type": "application/json" },
-  body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30000),
-});
-
-function failedBeforeConnect(error: unknown): boolean {
-  // node:https reports DNS/TCP failures directly. Timeouts and resets may occur after delivery.
-  return error instanceof Error && "code" in error &&
-    ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(String(error.code));
-}
-
-export async function fetchCurrentBills(onePlace = onePlaceClient(), zeabur = zeaburRequest) {
+export async function fetchCurrentBills(onePlace = onePlaceClient()) {
+  // Zeabur 停止營運（2026-12），JGB 匯出只走 OnePlace 機器介面，不再退回舊站。
   const started = Date.now();
-  let machine = await checkJgbFallback(onePlace).catch(() => false);
-  const read = async (path: string, body?: object) => {
-    const response = await (machine ? onePlace : zeabur)(path, body);
+  const fetchJson = async (path: string, body?: object) => {
+    const response = await onePlace(path, body);
     if (!response.ok) throw new Error(`JGB 匯出服務 HTTP ${response.status}`);
     return response.json();
   };
-  const fetchJson = async (path: string, body?: object) => {
-    try {
-      return await read(path, body);
-    } catch (err) {
-      // POST can switch only from the primary after a proven pre-connect failure.
-      // A status GET is safe on the other host using the acknowledged batch.
-      if (body && (!machine || !failedBeforeConnect(err))) throw err;
-      machine = !machine;
-      console.warn(`[jgb-report] switching to ${machine ? "OnePlace" : "Zeabur"} for ${body ? "export" : "status"}`);
-      return read(path, body);
-    }
-  };
-  console.info(`[jgb-report] export via ${machine ? "OnePlace" : "Zeabur"}`);
+  console.info("[jgb-report] export via OnePlace");
   const task = await fetchJson("/api/export-bills", {
     date_type: "all", bill_type: "income", statuses: ["unreceived"], async_mode: true,
   });
   if (task?.success !== true || !task.data?.batch_code || !task.data?.filename) throw new Error("JGB 未建立匯出批次");
   const batch = String(task.data.batch_code);
-  let lastProgress = -1;
-  let lastProgressAt = Date.now();
-  let stalledPolls = 0;
-  let checkedAlternate = false;
   for (let attempt = 0; attempt < 24 && Date.now() - started < 120000; attempt++) {
-    // A stalled job may finish on the other host. Switch once, retaining the same batch.
-    if (!checkedAlternate && (stalledPolls >= 8 || Date.now() - lastProgressAt >= 45000)) {
-      checkedAlternate = true;
-      machine = !machine;
-    }
     const state = await fetchJson(`/api/check-status?${new URLSearchParams({ batch_code: batch, filename: task.data.filename })}`);
     if (state?.success === true && Number(state.data?.process) === 100 && state.data?.url) {
       // Never read the shared latest_report.xlsx: other exports can overwrite it.
@@ -197,14 +164,6 @@ export async function fetchCurrentBills(onePlace = onePlaceClient(), zeabur = ze
       if (bytes.byteLength > 8_000_000) throw new Error("JGB 匯出檔案過大");
       return { bills: await parseWorkbook(bytes), fetchedAt: new Date(started), batch,
         digest: createHash("sha256").update(Buffer.from(bytes)).digest("hex") };
-    }
-    const progress = Number(state?.data?.process);
-    if (Number.isFinite(progress) && progress > lastProgress) {
-      lastProgress = progress;
-      lastProgressAt = Date.now();
-      stalledPolls = 0;
-    } else {
-      stalledPolls++;
     }
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
