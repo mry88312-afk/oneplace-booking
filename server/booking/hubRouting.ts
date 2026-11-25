@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
+import { FIELDOPS_BASE_URL } from "../../shared/fieldops";
 
-export const legacyHub = "https://fieldops.zeabur.app";
+// 既有切換腳本從建置產物匯入此名稱。
+export const legacyHub = FIELDOPS_BASE_URL;
 export const notifyPath = "/api/booking/notify-line";
 export const relayPath = "/api/line/relay";
 export const roommateGroupNotifyPath = "/api/booking/roommate-group-notify";
@@ -51,12 +53,12 @@ type HubResponse = { ok: boolean; status?: number; error?: string; messageId?: s
 export async function postToHub(path: HubPath, payload: object, opts?: { requireMessageId?: boolean }): Promise<HubResponse> {
   const secret = process.env.BOOKING_WEBHOOK_SECRET;
   if (!secret) return { ok: false, error: "BOOKING_WEBHOOK_SECRET 未設定；未發送" };
-  let origin = legacyHub;
+  let origin = FIELDOPS_BASE_URL;
   try {
     const route = activeRoute();
     if (route.primary === "gcp") {
       if (await probeHub(route.origin, path, secret)) origin = route.origin;
-      else console.warn("[hub-route] GCP readiness failed; dispatch via Zeabur");
+      else console.warn("[hub-route] Configured hub readiness failed; dispatch via default FieldOps origin");
     }
   } catch {
     return { ok: false, error: "中台路由設定無法讀取；未發送" };
@@ -66,7 +68,7 @@ export async function postToHub(path: HubPath, payload: object, opts?: { require
   const groupNotice = path === roommateGroupNotifyPath;
   try {
     const r = await request(origin + path, secret, JSON.stringify(payload), 15000);
-    console.info(`[hub-route] ${origin === legacyHub ? "zeabur" : "gcp"} ${path} HTTP ${r.status}`);
+    console.info(`[hub-route] ${origin} ${path} HTTP ${r.status}`);
     if (r.ok) {
       const body = await r.json();
       if (groupNotice) {

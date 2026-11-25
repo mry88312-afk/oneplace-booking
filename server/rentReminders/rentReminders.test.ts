@@ -134,9 +134,9 @@ test("壞數字／日期／明細不允許通知，卡片顯示整張金額與�
   assert.match(message, /水電/);
 });
 test("租客對話以唯一合約主承租人 UID 開啟，缺漏與衝突不提供連結", () => {
-  assert.equal(tenantInboxUrl("456", [identity]), `https://fieldops.zeabur.app/inbox?uid=${identity.uid}`);
+  assert.equal(tenantInboxUrl("456", [identity]), `https://fieldops.oneplace.com.tw/inbox?uid=${identity.uid}`);
   assert.equal(tenantInboxUrl("456", [{ ...identity, jgb_id: "456", raw_jgb_id: null }]),
-    `https://fieldops.zeabur.app/inbox?uid=${identity.uid}`);
+    `https://fieldops.oneplace.com.tw/inbox?uid=${identity.uid}`);
   // Conversation access remains available when a bill is not currently eligible for reminders.
   assert.ok(tenantInboxUrl("456", [{ ...identity, status: "cancelled", end_date: "2025-01-01" }]));
   for (const rows of [null, [], [identity, identity], [{ ...identity, jgb_id: "999" }],

@@ -329,7 +329,7 @@ async function startServer() {
     console.log(`[oneplace-booking] Environment: ${process.env.NODE_ENV || "development"}`);
     console.log(`[oneplace-booking] BOOKING_DATABASE_URL: ${process.env.BOOKING_DATABASE_URL ? "set" : "MISSING"}`);
     console.log(`[oneplace-booking] RAGIC_API_KEY: ${process.env.RAGIC_API_KEY ? "set" : "MISSING"}`);
-    console.log(`[oneplace-booking] outbound LINE route: ${process.env.BOOKING_HUB_ROUTE_FILE ? "operator route file" : "zeabur"}`);
+    console.log(`[oneplace-booking] outbound LINE route: ${process.env.BOOKING_HUB_ROUTE_FILE ? "operator route file" : "default FieldOps origin"}`);
     console.log(`[oneplace-booking] BOOKING_WEBHOOK_SECRET: ${process.env.BOOKING_WEBHOOK_SECRET ? "set" : "MISSING"}`);
     console.log(`[oneplace-booking] GOOGLE_SERVICE_ACCOUNT_JSON: ${process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "set" : "MISSING"}`);
     if (!process.env.BOOKING_DATABASE_URL) {
