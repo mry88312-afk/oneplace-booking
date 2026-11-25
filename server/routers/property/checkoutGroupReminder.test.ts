@@ -232,8 +232,10 @@ test("外勤站暫停發送時，記一次嘗試並解除群組排程的派送�
   const fixture = dispatchFixture({ deliveryStatus: "outbound_disabled" });
   assert.equal((await fixture.dispatch()).failed, 1);
   assert.match(fixture.updates[0].sql, /attempt_count=coalesce\(attempt_count,0\)\+1/);
-  assert.match(fixture.updates[1].sql, /status='confirmed', vars=vars - '_hub_dispatch_started'/);
-  assert.deepEqual(fixture.updates[1].params, ["排程識別碼", "outbound_disabled"]);
+  // 未達上限：改回 confirmed 並解除派送鎖；達上限（6 次）：停在 suppressed 交人工核對
+  assert.match(fixture.updates[1].sql, /when coalesce\(attempt_count,0\) >= \$3 then 'suppressed' else 'confirmed'/);
+  assert.match(fixture.updates[1].sql, /else vars - '_hub_dispatch_started'/);
+  assert.deepEqual(fixture.updates[1].params, ["排程識別碼", "outbound_disabled", "6"]);
 });
 
 test("外勤站沿用 webhook header，讀取 200 回執且單次呼叫不重送", async t => {

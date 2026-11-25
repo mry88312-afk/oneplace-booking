@@ -140,6 +140,9 @@ async function markSendFailure(id: string, errMsg: string, query = sbQuery): Pro
   );
 }
 
+/** 退租群組提醒累計失敗幾次後停止自動重試（每 5 分鐘一輪，約 30 分鐘）。 */
+const CHECKOUT_GROUP_MAX_ATTEMPTS = 6;
+
 async function markOutreachSent(id: string, query: typeof sbQuery): Promise<void> {
   await query(
     `update outreach.schedule set status='sent', sent_at=now(), suppressed_reason=null, last_error=null, updated_at=now() where id=$1`,
@@ -325,6 +328,11 @@ export async function runOutreach(
           continue;
         }
         if (!row.dedupe_key) throw new Error("退租群組提醒缺少去重碼");
+        if (String(row.vars?.booking_date || "") < taipeiYmd(Date.now())) {
+          await markOutreachSkipped(row.id, "退租日已過，不再發送", query);
+          result.skipped++;
+          continue;
+        }
         const { text } = checkoutGroupTextMessage(card, vars);
         if (!await claimOutreach(row.id, query)) { result.skipped++; continue; }
         dispatchStarted = true;
@@ -340,11 +348,15 @@ export async function runOutreach(
           result.skipped++;
         } else {
           // claim 已記一次 attempt；外勤站按同一去重碼處理後續重試。
+          // 重試上限：累計 CHECKOUT_GROUP_MAX_ATTEMPTS 次仍失敗就停在 suppressed（保留派送標記），交人工核對，避免每 5 分鐘無限重送。
           await query(
-            `update outreach.schedule set status='confirmed', vars=vars - '_hub_dispatch_started',
-                    suppressed_reason=null, last_error=$2, updated_at=now()
+            `update outreach.schedule
+                set status=case when coalesce(attempt_count,0) >= $3 then 'suppressed' else 'confirmed' end,
+                    vars=case when coalesce(attempt_count,0) >= $3 then vars else vars - '_hub_dispatch_started' end,
+                    suppressed_reason=case when coalesce(attempt_count,0) >= $3 then '退租群組提醒重試已達上限，請人工核對' else null end,
+                    last_error=$2, updated_at=now()
               where id=$1 and status='suppressed' and sent_at is null and vars ? '_hub_dispatch_started'`,
-            [row.id, outcome.error.slice(0, 1000)],
+            [row.id, outcome.error.slice(0, 1000), String(CHECKOUT_GROUP_MAX_ATTEMPTS)],
           );
           result.failed++;
           result.errors.push({ id: row.id, error: outcome.error });
