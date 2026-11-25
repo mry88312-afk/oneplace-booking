@@ -115,7 +115,7 @@ async function startServer() {
     }
   });
 
-  // 預約前一日提醒掃描：pg_cron 每日台北 17:00 呼叫；掃明天「退租＋續約」預約 → 排今天 18:00 提醒。需共享密鑰。
+  // pg_cron 每日台北 17:00 呼叫，排入退租、續約前一日與退租前三日群組提醒。
   app.post("/api/outreach/scan-checkout", async (req, res) => {
     const expected = process.env.OUTREACH_RUN_SECRET;
     if (!expected) return res.status(503).json({ error: "OUTREACH_RUN_SECRET not set" });
@@ -125,15 +125,21 @@ async function startServer() {
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
       return res.status(401).json({ error: "unauthorized" });
     }
-    try {
-      const { scanCheckoutReminders, scanRenewalReminders } = await import("./routers/property/outreachHandlers");
-      const checkout = await scanCheckoutReminders();
-      const renewal = await scanRenewalReminders();
-      return res.json({ checkout, renewal });
-    } catch (err: any) {
-      console.error("[outreach] scan-checkout error:", err?.message || err);
-      return res.status(500).json({ error: err?.message || "error" });
+    async function runScan<T extends { ok: boolean }>(name: string, scan: () => Promise<T>) {
+      try {
+        return await scan();
+      } catch (error) {
+        console.error(`[outreach] ${name} 掃描失敗:`, error);
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
     }
+    const checkout = await runScan("退租前一日提醒", async () =>
+      (await import("./routers/property/outreachHandlers")).scanCheckoutReminders());
+    const renewal = await runScan("續約前一日提醒", async () =>
+      (await import("./routers/property/outreachHandlers")).scanRenewalReminders());
+    const checkoutGroup = await runScan("退租前三日群組提醒", async () =>
+      (await import("./routers/property/checkoutGroupReminder")).scanCheckoutGroupReminders());
+    return res.status(checkout.ok && renewal.ok && checkoutGroup.ok ? 200 : 500).json({ checkout, renewal, checkoutGroup });
   });
 
   // 投遞 API：外部系統（Ragic/MANUS 等）把卡片排進統一發訊中樞。需共享密鑰；去重碼擋重複。

@@ -18,7 +18,9 @@ import { getDb } from "../../db";
 import * as schema from "../../../drizzle/schema";
 import { claimOutreach } from "../../booking/claimOutreach";
 import { reminderTaskExists } from "../../booking/reminderTask";
+import { postToHub, roommateGroupNotifyPath } from "../../booking/hubRouting";
 import { relayPush } from "./bookingConfirmHandler";
+import { CHECKOUT_GROUP_RULE_KEY, checkoutGroupHubOutcome, taipeiYmd, taipeiHm } from "./checkoutGroupReminder";
 import { projectIdsForBookingActions } from "../../config/bookingActions";
 import { rentHistory, previewRentReminders, setRentEnabled } from "../../rentReminders/service";
 
@@ -42,6 +44,7 @@ type ScheduleRow = {
   vars?: Record<string, any> | null;
   card_override?: any;
   dedupe_key?: string;
+  due?: boolean;
 };
 
 /** 把卡片範本內的 {{變數}} 換成實際值（JSON-safe）。 */
@@ -79,15 +82,6 @@ function computeVars(row: ScheduleRow): Record<string, string> {
     for (const [k, v] of Object.entries(row.vars)) vars[k] = String(v ?? "");
   }
   return vars;
-}
-
-/** 台北時區 'YYYY-MM-DD'（輸入 ms 時間戳）。 */
-function taipeiYmd(ms: number): string {
-  return new Date(ms + 8 * 3600_000).toISOString().slice(0, 10);
-}
-/** 台北時區 'HH:mm'。 */
-function taipeiHm(ms: number): string {
-  return new Date(ms + 8 * 3600_000).toISOString().slice(11, 16);
 }
 
 /**
@@ -137,14 +131,64 @@ export function toFlexMessage(card: any, altText?: string): any {
 export type RunResult = { sent: number; suppressed: number; failed: number; skipped: number; errors: { id: string; error: string }[] };
 
 /** 發送失敗時回寫追蹤欄位（last_error / last_attempt_at / attempt_count）。僅用於真實發送路徑；測試模式不回寫，保持可重複測、不污染計數。 */
-async function markSendFailure(id: string, errMsg: string): Promise<void> {
-  await sbQuery(
+async function markSendFailure(id: string, errMsg: string, query = sbQuery): Promise<void> {
+  await query(
     `update outreach.schedule
         set last_error=$2, last_attempt_at=now(), attempt_count=coalesce(attempt_count,0)+1, updated_at=now()
       where id=$1`,
     [id, String(errMsg || "send failed").slice(0, 1000)],
   );
 }
+
+async function markOutreachSent(id: string, query: typeof sbQuery): Promise<void> {
+  await query(
+    `update outreach.schedule set status='sent', sent_at=now(), suppressed_reason=null, last_error=null, updated_at=now() where id=$1`,
+    [id],
+  );
+}
+
+async function markOutreachSkipped(id: string, reason: string, query: typeof sbQuery): Promise<void> {
+  await query(
+    `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now()
+      where id=$1 and status in ('pending','confirmed')`,
+    [id, reason],
+  );
+}
+
+function checkoutGroupTextMessage(card: unknown, vars: Record<string, string>) {
+  if (!card || typeof card !== "object" || !("type" in card) || card.type !== "text"
+    || !("text" in card) || typeof card.text !== "string") {
+    throw new Error("退租群組提醒缺少 LINE 純文字範本");
+  }
+  const { text } = renderTemplate(card, vars);
+  if (typeof text !== "string" || !text.trim()) throw new Error("退租群組提醒文字為空");
+  return { type: "text", text };
+}
+
+async function readOutreachBooking(id: number) {
+  if (!Number.isSafeInteger(id) || id <= 0) return undefined;
+  const db = await getDb();
+  if (!db) return null;
+  const [booking] = await db.select({
+    status: schema.bookingRecords.status,
+    bookingTime: schema.bookingRecords.bookingTime,
+    ragicRecordId: schema.bookingRecords.ragicRecordId,
+    ragicTaskPath: schema.bookingTemplates.ragicTaskPath,
+  }).from(schema.bookingRecords)
+    .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
+    .where(eq(schema.bookingRecords.id, id)).limit(1);
+  return booking;
+}
+
+const outreachDependencies = {
+  query: sbQuery,
+  isConfigured: isSupabaseConfigured,
+  readBooking: readOutreachBooking,
+  taskExists: reminderTaskExists,
+  relay: relayPush,
+  notifyGroup: (payload: { siteNo: string; text: string; dedupeKey: string }) =>
+    postToHub(roommateGroupNotifyPath, payload),
+};
 
 async function guardRentSchedule(id: string) {
   const rows = await sbQuery(`select id from outreach.schedule where id=$1 and dedupe_key like 'jgb-rent:%'`, [id]);
@@ -185,16 +229,19 @@ async function skipOne(id: string): Promise<{ id: string; ok: boolean; error?: s
  * - 命中 booking_records → status=suppressed（非錯誤，不發）
  * - 發送成功 → status=sent + sent_at；派送已開始但回應不明 → 保留鎖定，勿重送
  */
-export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
+export async function runOutreach(
+  scheduleIds: string[],
+  { query, isConfigured, readBooking, taskExists, relay, notifyGroup } = outreachDependencies,
+): Promise<RunResult> {
   const result: RunResult = { sent: 0, suppressed: 0, failed: 0, skipped: 0, errors: [] };
-  if (!isSupabaseConfigured()) throw new Error("SUPABASE_DB_URL not set");
+  if (!isConfigured()) throw new Error("SUPABASE_DB_URL not set");
   if (!Array.isArray(scheduleIds) || scheduleIds.length === 0) return result;
 
-  const rows = await sbQuery<ScheduleRow & { card_template: any }>(
+  const rows = await query<ScheduleRow & { card_template: any; rule_label: string | null }>(
     `select s.id, s.tenant_uid, s.tenant_name, s.room, s.property_name, s.contract_no,
             to_char(s.contract_end_date, 'YYYY-MM-DD') as contract_end_date,
             s.rule_key, to_char(s.scheduled_date, 'YYYY-MM-DD') as scheduled_date,
-            s.status, s.manually_edited, s.suppressed_reason, s.sent_at,
+            s.status, s.manually_edited, s.suppressed_reason, s.sent_at, s.send_at <= now() as due,
             s.source, s.recipient_phone, s.alt_text, s.vars, s.card_override, s.dedupe_key,
             r.card_template, r.label as rule_label
        from outreach.schedule s
@@ -206,7 +253,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
   // 測試模式：設定了 test_redirect_uid 時，所有發送一律改寄到它（永不送真實室友）
   const redirect =
     (
-      await sbQuery<{ u: string | null }>(
+      await query<{ u: string | null }>(
         `select nullif(trim(test_redirect_uid),'') as u from outreach.settings where id=1`,
       )
     )[0]?.u || null;
@@ -222,22 +269,26 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         result.skipped++;
         continue;
       }
+      const groupNotice = row.rule_key === CHECKOUT_GROUP_RULE_KEY;
       // 卡片：api 來源帶 card_override，其餘用規則卡
-      const card = row.card_override ?? row.card_template;
+      const card = groupNotice ? row.card_template : row.card_override ?? row.card_template;
       const altText =
         row.alt_text ||
         RULE_ALT_TEXT[row.rule_key] ||
-        ((row as any).rule_label ? "一方生活｜" + (row as any).rule_label : "一方生活通知");
-      if (!card) {
-        if (!redirect) await markSendFailure(row.id, "無卡片內容（card_override 與規則卡皆空）");
+        (row.rule_label ? "一方生活｜" + row.rule_label : "一方生活通知");
+      if (!card && !groupNotice) {
+        if (!redirect) await markSendFailure(row.id, "無卡片內容（card_override 與規則卡皆空）", query);
         result.failed++;
         result.errors.push({ id: row.id, error: "no card" });
         continue;
       }
       if (redirect) {
         // 測試模式：改寄到測試 LINE、跳過防重、不改原排程狀態（可重複測、永不送真人）
-        const tmsg = toFlexMessage(renderTemplate(card, computeVars(row)), "【測試】" + altText);
-        const tpush = await relayPush(redirect, tmsg, { record: false });
+        const vars = computeVars(row);
+        const tmsg = groupNotice
+          ? checkoutGroupTextMessage(card, vars)
+          : toFlexMessage(renderTemplate(card, vars), "【測試】" + altText);
+        const tpush = await relay(redirect, tmsg, { record: false });
         if (tpush.success) result.sent++;
         else {
           result.failed++;
@@ -245,34 +296,60 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         }
         continue;
       }
+      if (groupNotice) {
+        if (row.due !== true) { result.skipped++; continue; }
+        if (row.source !== "booking") throw new Error("退租群組提醒缺少預約來源");
+      }
       // 退租提醒：發送前再驗（解掃描後取消/改期）
       if (row.source === "booking") {
-        const bid = Number(row.vars?.booking_id);
-        const db = await getDb();
-        const bk = db && bid
-          ? await db.select({ status: schema.bookingRecords.status, bookingTime: schema.bookingRecords.bookingTime,
-              ragicRecordId: schema.bookingRecords.ragicRecordId, ragicTaskPath: schema.bookingTemplates.ragicTaskPath })
-              .from(schema.bookingRecords)
-              .innerJoin(schema.bookingTemplates, eq(schema.bookingRecords.templateId, schema.bookingTemplates.id))
-              .where(eq(schema.bookingRecords.id, bid)).limit(1)
-          : [];
-        const ok = bk.length > 0 && bk[0].status === "confirmed" && taipeiYmd(bk[0].bookingTime) === String(row.vars?.booking_date || "");
-        if (!ok) {
-          await sbQuery(
-            `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
-            [row.id, "退租預約已取消或已改期（發送前再驗）"],
-          );
+        const booking = await readBooking(Number(row.vars?.booking_id));
+        if (groupNotice && booking === null) throw new Error("預約資料庫無法連線");
+        const bookingDate = taipeiYmd(booking?.bookingTime);
+        if (booking?.status !== "confirmed" || !bookingDate || bookingDate !== row.vars?.booking_date) {
+          await markOutreachSkipped(row.id, "退租預約已取消或已改期（發送前再驗）", query);
           result.skipped++;
           continue;
         }
-        if (!await reminderTaskExists(bk[0].ragicTaskPath, bk[0].ragicRecordId || '')) {
-          await sbQuery(
-            `update outreach.schedule set status='skipped', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
-            [row.id, 'Ragic 預約任務已不存在（發送前查核）'],
-          );
+        if (!await taskExists(booking.ragicTaskPath, booking.ragicRecordId || '')) {
+          await markOutreachSkipped(row.id, "Ragic 預約任務已不存在（發送前查核）", query);
           result.skipped++;
           continue;
         }
+      }
+      if (groupNotice) {
+        const vars = computeVars(row);
+        const siteNo = typeof row.vars?.site_no === "string" ? row.vars.site_no.trim() : "";
+        if (!siteNo) {
+          await markOutreachSkipped(row.id, `no_site_no:${vars.context_error || ""}`, query);
+          result.skipped++;
+          continue;
+        }
+        if (!row.dedupe_key) throw new Error("退租群組提醒缺少去重碼");
+        const { text } = checkoutGroupTextMessage(card, vars);
+        if (!await claimOutreach(row.id, query)) { result.skipped++; continue; }
+        dispatchStarted = true;
+        const outcome = checkoutGroupHubOutcome(await notifyGroup({ siteNo, text, dedupeKey: row.dedupe_key }));
+        if (outcome.status === "sent") {
+          await markOutreachSent(row.id, query);
+          result.sent++;
+        } else if (outcome.status === "skipped") {
+          await query(
+            `update outreach.schedule set status='skipped', suppressed_reason=$2, last_error=null, updated_at=now() where id=$1`,
+            [row.id, outcome.reason],
+          );
+          result.skipped++;
+        } else {
+          // claim 已記一次 attempt；外勤站按同一去重碼處理後續重試。
+          await query(
+            `update outreach.schedule set status='confirmed', vars=vars - '_hub_dispatch_started',
+                    suppressed_reason=null, last_error=$2, updated_at=now()
+              where id=$1 and status='suppressed' and sent_at is null and vars ? '_hub_dispatch_started'`,
+            [row.id, outcome.error.slice(0, 1000)],
+          );
+          result.failed++;
+          result.errors.push({ id: row.id, error: outcome.error });
+        }
+        continue;
       }
       // 發送前即時防呆（rule 卡）：合約已退租(move_out_date)、或同房已有「更晚開始的新合約」
       // （本人續約 or 別人接手）→ 一律不發。涵蓋 recompute 與發送之間才退租/續約的同日空窗，
@@ -281,7 +358,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       // 同一人（tenant_id 或 LINE UID）在別房/別案場有更晚的合約＝換房續約，也算 superseded。
       // 作廢合約（退租日 ≤ 開始日）不算後續合約。
       if ((row.source ?? "rule") === "rule" && row.contract_no) {
-        const chk = await sbQuery<{ moved_out: boolean; superseded: boolean }>(
+        const chk = await query<{ moved_out: boolean; superseded: boolean }>(
           `select tc.move_out_date is not null as moved_out,
                   exists (
                     select 1 from contract.tenant_contracts c2
@@ -312,7 +389,7 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
         );
         const hit = chk[0];
         if (hit && (hit.moved_out || hit.superseded)) {
-          await sbQuery(
+          await query(
             `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
             [row.id, hit.moved_out ? "合約已退租（move_out_date 已填，發送前查核）" : "房間已有更新合約（續約/接手，發送前查核）"],
           );
@@ -324,29 +401,29 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       let targetUid = row.tenant_uid;
       if (!targetUid && row.recipient_phone) {
         const normalized = row.recipient_phone.replace(/[\s\-()]/g, "");
-        const t = await sbQuery<{ line_uid: string }>(
+        const t = await query<{ line_uid: string }>(
           `select line_uid from contract.tenants where primary_phone=$1 and line_uid is not null and line_uid<>'' limit 1`,
           [normalized],
         );
         if (t.length) {
           targetUid = t[0].line_uid;
-          await sbQuery(`update outreach.schedule set tenant_uid=$2, updated_at=now() where id=$1`, [row.id, targetUid]);
+          await query(`update outreach.schedule set tenant_uid=$2, updated_at=now() where id=$1`, [row.id, targetUid]);
         } else {
-          await markSendFailure(row.id, `查無 LINE UID（電話 ${normalized}），綁定後可重送`);
+          await markSendFailure(row.id, `查無 LINE UID（電話 ${normalized}），綁定後可重送`, query);
           result.failed++;
           result.errors.push({ id: row.id, error: `no LINE UID for phone ${normalized}` });
           continue;
         }
       }
       if (!targetUid) {
-        await markSendFailure(row.id, "無收件人（uid 與電話皆空）");
+        await markSendFailure(row.id, "無收件人（uid 與電話皆空）", query);
         result.failed++;
         result.errors.push({ id: row.id, error: "no recipient" });
         continue;
       }
       // 防重打擾只適用合約規則卡（booking 提醒本來就該有退租預約；api 內容由來源系統決定）
       if ((row.source ?? "rule") === "rule" && (await hasActiveBookingSuppress(targetUid))) {
-        await sbQuery(
+        await query(
           `update outreach.schedule set status='suppressed', suppressed_reason=$2, updated_at=now() where id=$1 and status in ('pending','confirmed')`,
           [row.id, "已有續約/退租預約（booking_records 即時查核）"],
         );
@@ -356,25 +433,22 @@ export async function runOutreach(scheduleIds: string[]): Promise<RunResult> {
       const message = toFlexMessage(renderTemplate(card, computeVars(row)), altText);
       // Claim in the shared database before any network send. Even a crash or lost
       // receipt leaves this row out of the cron queue across both deployments.
-      if (!await claimOutreach(row.id, sbQuery)) { result.skipped++; continue; }
+      if (!await claimOutreach(row.id, query)) { result.skipped++; continue; }
       dispatchStarted = true;
-      const push = await relayPush(targetUid, message);
+      const push = await relay(targetUid, message);
       if (push.success) {
-        await sbQuery(
-          `update outreach.schedule set status='sent', sent_at=now(), suppressed_reason=null, last_error=null, updated_at=now() where id=$1`,
-          [row.id],
-        );
+        await markOutreachSent(row.id, query);
         result.sent++;
       } else {
         const error = push.error || "中台派送未確認，請核對，勿重送";
-        await sbQuery(`update outreach.schedule set last_error=$2, updated_at=now() where id=$1`, [row.id, error]);
+        await query(`update outreach.schedule set last_error=$2, updated_at=now() where id=$1`, [row.id, error]);
         result.failed++;
         result.errors.push({ id: row.id, error });
       }
     } catch (err: any) {
       console.error(`[outreach] error on ${row.id}: ${err?.message || err}`);
       if (!redirect && !dispatchStarted) {
-        try { await markSendFailure(row.id, String(err?.message || err)); } catch {}
+        try { await markSendFailure(row.id, String(err?.message || err), query); } catch {}
       }
       result.failed++;
       result.errors.push({ id: row.id, error: String(err?.message || err) });
