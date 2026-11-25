@@ -36,6 +36,8 @@ export const CHECKOUT_GROUP_DEFAULT_TEXT = `❗️倒數三天重要提醒
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const checkoutProjectIds = projectIdsForBookingActions(["退租"]);
+/** 會發退租群組提醒的案場歸屬（property.properties.ownership_region）。 */
+export const CHECKOUT_GROUP_OWNERSHIPS = ["總公司", "代管", "小虎個人簽"];
 
 export function isCheckoutReminderProject(projectId: string) {
   return checkoutProjectIds.includes(projectId);
@@ -125,9 +127,10 @@ export async function resolveCheckoutGroupContext(
   if (!property) return { context: null, reason: "property_not_found" };
   const siteNo = typeof property.site_no === "number" && Number.isFinite(property.site_no)
     ? String(property.site_no) : cleanText(property.site_no);
-  // 沿用租金提醒的案場歸屬欄位，另外排除標為外來的案場。
+  // 使用者拍板（2026-11-25）：發「總公司、代管、小虎個人簽」；加盟／靠行／外來及其他歸屬不發。
   const excludedCategories = ["靠行", "加盟", "外來"];
-  const exclusion = property.ownership_region !== "總公司" || excludedCategories.includes(cleanText(property.hq_internal_category));
+  const exclusion = !CHECKOUT_GROUP_OWNERSHIPS.includes(cleanText(property.ownership_region))
+    || excludedCategories.includes(cleanText(property.hq_internal_category));
   const contractNo = cleanText(residence.contractNo);
   const names = contractNo ? await deps.sbQuery<{ name: string }>(
     `select distinct trim(t.primary_name) as name

@@ -89,7 +89,20 @@ test("解析依案場識別碼取案場編號，並用該合約與 UID 取本名
   assert.deepEqual(result, { context: { siteNo: "123", tenantName: "合約本名", room: "A３", propertyName: "測試簡稱" }, reason: "" });
 });
 
-for (const [region, category] of [["加盟", null], ["總公司", "靠行"], ["總公司", "外來"]]) {
+for (const region of ["代管", "小虎個人簽"]) {
+  test(`可發案場歸屬 ${region}`, async () => {
+    const result = await resolveCheckoutGroupContext(booking, {
+      resolveResidences: async () => [residence],
+      sbQuery: async <T>(sql: string) => sql.includes("from property.properties")
+        ? [{ site_no: "123", short_name: "測試簡稱", ownership_region: region, hq_internal_category: null }] as T[]
+        : [],
+    });
+    assert.equal(result.context?.siteNo, "123");
+    assert.equal(result.reason, "");
+  });
+}
+
+for (const [region, category] of [["加盟", null], ["靠行", null], ["台中", null], ["總公司", "靠行"], ["總公司", "外來"]]) {
   test(`排除案場歸屬 ${region}／${category ?? "無分類"}`, async () => {
     const result = await resolveCheckoutGroupContext(booking, {
       resolveResidences: async () => [residence],
