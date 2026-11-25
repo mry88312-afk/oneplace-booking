@@ -1,3 +1,5 @@
+import { FIELDOPS_BASE_URL } from "../../shared/fieldops";
+
 export type Fee = { name: string; amount: number };
 export type Bill = {
   id: string; contractId: string; name: string; payer: string; room: string;
@@ -41,7 +43,7 @@ export function tenantInboxUrl(contractId: string, identities: Identity[] | unkn
   const r = matches[0];
   if (!r.tenant_id || !r.tenant_name || !r.uid || !/^U[0-9a-f]{32}$/i.test(r.uid) || r.uid_conflict) return null;
   if (r.jgb_id && r.raw_jgb_id && String(r.jgb_id).trim() !== String(r.raw_jgb_id).trim()) return null;
-  return `https://fieldops.zeabur.app/inbox?uid=${encodeURIComponent(r.uid)}`;
+  return `${FIELDOPS_BASE_URL}/inbox?uid=${encodeURIComponent(r.uid)}`;
 }
 export function decide(bill: Bill, identities: Identity[] | unknown, today: string) {
   const matches = matchingIdentities(bill.contractId, identities);

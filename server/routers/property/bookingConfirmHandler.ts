@@ -16,6 +16,7 @@ import { submissionIdentity, persistedAnswers, submitBookingOnce } from "../../b
 import { createSubmissionStore } from "../../booking/submissionStore";
 import { BOOKING_REFRESH, BOOKING_UNAVAILABLE, errorCode } from "../../../shared/bookingErrors";
 
+import { FIELDOPS_BASE_URL } from "../../../shared/fieldops";
 import { postToHub, relayPath, notifyPath } from "../../booking/hubRouting";
 import { isCheckoutReminderProject, maybeEnqueueImmediateCheckoutGroupReminder } from "./checkoutGroupReminder";
 
@@ -591,7 +592,7 @@ export async function handleConfirmBooking(
           // 注意：對話網址指向主系統的客服介面
           const inboxBase =
             process.env.MAIN_SYSTEM_INBOX_URL ||
-            "https://fieldops.zeabur.app/inbox";
+            `${FIELDOPS_BASE_URL}/inbox`;
           ragicData[field.ragicFieldId] = `${inboxBase}?uid=${input.uid}`;
           continue;
         }
